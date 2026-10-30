@@ -1,16 +1,49 @@
 # Azure Databricks enterprise retail data platform architecture
 
-**Revision A3 — 30 October 2026 — one DEV environment**  
+**Revision A4 — 30 October 2026 — one DEV environment**
+
 **Status: proposed architecture for review; implementation is stopped.**  
 **Destination: harshitarav/azure-databricks-project, verified default branch main, root architecture.md.**
 
-This document audits Architecture A2 dated 30 October 2026 and selects the corrected design. It preserves eight logical integrations and four genuine interfaces: PostgreSQL, SFTP, REST and Kafka. Large ingestion, validation, joins, reconciliation and transformations use distributed Spark workers. Small serialized control work does not require a large Spark cluster.
+This document corrects the existing A3 architecture and retains its verified source evidence, business products and justified infrastructure. The earlier A2 audit remains as traceable history. It preserves eight logical integrations and four genuine interfaces: PostgreSQL, SFTP, REST and Kafka. Large ingestion, validation, joins, reconciliation and transformations use distributed Spark workers. Small serialized control work does not require a large Spark cluster.
 
-Only this Markdown document is authorized for creation and recording. Nothing here approves implementation, fault execution, paid resources, deployment or production readiness. Original files and existing implementation artifacts remain in their current locations. Their existence does not establish that their runtime behavior satisfies this architecture.
+Only this Markdown document is authorized for updating and recording. Nothing here approves implementation, fault execution, paid resources, deployment or production readiness. Original files and existing implementation artifacts remain in their current locations. Their existence does not establish that their runtime behavior satisfies this architecture.
 
 **Evidence labels:** VERIFIED means directly read in the supplied contracts, retained evidence or official service documentation; SELECTED means a simulated business or architectural policy; GATE means proof required later. All new runtime tests in this document are **NOT EXECUTED**.
 
-## 1. Important corrections and A2 audit register
+## 0. A4 corrections and four independently justified ingestion patterns
+
+A3 incorrectly removed Auto Loader from the five SFTP integrations. **That decision is superseded.** Every SFTP source now follows downloaded seed → simulated Azure SFTP supplier → ADF SFTP acquisition → ADLS Gen2 Raw/staging → Auto Loader → managed Bronze → source-specific Silver → business Gold.
+
+ADF is the enterprise orchestrator for eligible bounded work, not a replacement for source clients or Spark. It initiates the scheduled Open Prices acquisition and independent receipt workflows, PostgreSQL initialization and article polling, all five SFTP acquisition/Auto Loader workflows, selected domain Gold publication, reconciliation and controlled recovery. Continuous Debezium, the transactional Kafka producer and native streaming queries retain their native lifecycle/state.
+
+| Pattern | Selected acquisition and staging | Bronze execution and authority | Why this pattern is different |
+|---|---|---|---|
+| PostgreSQL | Real database initialized from the approved H&M seed; sealed article snapshot/journal; Debezium consistent customer/purchase snapshot then WAL | Articles bounded JDBC/sealed capture; customers/purchases native Kafka-to-Delta; source journal, slot and Connect offsets remain authoritative | ADF coordinates real database snapshot/cutover and bounded recovery; no SFTP or Auto Loader inserted into WAL CDC |
+| Five SFTP datasets | Actual Azure Blob SFTP source → ADF Binary Copy → immutable original Raw → verified record-capture data files in isolated accepted staging | Five source-specific Auto Loader queries with persistent checkpoints; idempotent per-file target commits, then whole-delivery reconciliation/marker/ACK | Original files and source ordinals are preserved; accepted data files, not incomplete Raw or trigger-only receipts, feed cloudFiles |
+| Open Prices REST | Actual REST → serialized Python → immutable HTTP evidence → one acquisition ledger → accepted receipts | Independent receipt Auto Loader → idempotent ITEM/WINDOW_COMMIT Bronze | ADF owns the 15/5-minute wake-ups; it neither issues provider pages nor owns the API acquisition frontier |
+| REES46 Kafka | Independent CSV-seeded producer → actual transactional Kafka and real registry; no ADLS event staging | Direct native Kafka Structured Streaming → native Delta append/checkpoint | ADF coordinates startup readiness, monitoring and bounded recovery; no per-record, transaction or micro-batch activities |
+
+**Source-specific SFTP handling is mandatory:** quote-aware CSV, original open JSONL, native Parquet types and station-aware TOA5 headers are validated by their own adapters. To preserve deterministic original ordinals and avoid unsplittable-gzip limitations, Auto Loader consumes bounded technical capture **data** files prepared after verified Raw (§7). Sharing this file-ingestion pattern across SFTP does not make PostgreSQL, REST or Kafka file-ingestion patterns.
+
+### 0.1 Precise changes from A3
+
+| ID / class | A3 decision corrected or clarified | A4 selected decision / affected contract |
+|---|---|---|
+| A4-01 CORRECT | A09/AM-03 removed SFTP Auto Loader | Restore Auto Loader for all five SFTP sources; A3 removal is explicitly revoked. R01–R10 source payload/identity decisions remain intact. |
+| A4-02 ADD | ADF duties around PostgreSQL initialization were incomplete | ADF coordinates source readiness, sealed article FULL, native Debezium snapshot/cutover proof, capture readiness and bounded database recovery. No CDC table polling replacement. |
+| A4-03 CORRECT | D10/A3 native Job cron owns API 15/5-minute schedules | **ADF exclusively owns both schedules**; remove/disable the corresponding native Job cron bindings. Keep the same two configured Jobs, independent receipt path, ledger, HTTP limits and ownership/fencing. Material orchestration amendment OA-API-02, not a provider/schema MINOR. |
+| A4-04 CORRECT | A3 claimed one atomic Bronze write for an entire SFTP package | Auto Loader can commit multiple file batches. DATA + FILE_COMMIT are atomic per bounded target write; a separately verified DELIVERY_COMMIT authorizes the whole package. Partial Bronze never authorizes Silver/Gold or ACK. Receiver ingestion protocol R2/2.0.0. |
+| A4-05 ADD | Accepted-file visibility, empty files and original ordinal mapping were unspecified | Freeze/verify capture set, publish only closed verified capture data into accepted staging, retain one file-control row even for zero source rows, use persistent per-source native checkpoints. |
+| A4-06 CORRECT | Multiple source workflows could compete to refresh shared Gold products | One designated writer per product: native H&M conformance for G01/G02; source workflows for G03/G05/G06; ADF domain-product workflows for G04/G07. |
+| A4-07 ADD | Cross-source readiness and stale Gold need explicit coordination | Product-specific dependency/version sets and publication debt; no global barrier across unrelated domains; commit-aware readiness, not activity-success inference. |
+| A4-08 KEEP | Source counts, 275 identified DQ rules plus OFF categories, API/Kafka R2 semantics, one DEV and 31 managed tables | Preserve them; extend only affected receiver/orchestration contracts and qualification scenarios. |
+| A4-09 KEEP | A3 separated SFTP hosting from lake WORM compatibility | Retain one supplier account and one lake account because the documented SFTP/WORM conflict is real; accepted staging is a container in that same lake account, not another account. |
+| A4-10 ADD | Cost/freshness excluded SFTP preparation and native file discovery work | Count preparation, capture storage, Auto Loader discovery/micro-batches, reconciliation and ADF dispatch delays; no new measured result or SLA claim. |
+
+A4 is proposed for architecture approval. Original source documents, code, configuration and already completed implementation work are not changed by these decisions.
+
+## 1. Retained A2 audit and A3 history with A4 resolutions
 
 A2 was recovered in full from the existing conversation “Design source simulation and ingest (2),” architecture revision A2, 30 October 2026. The older local ARCHITECTURE.md dated 29 October and the identical older Downloads/version1 architecture copies are supporting history, not A2. The superseded repository/path mentioned in A2 is not this document's destination.
 
@@ -26,8 +59,8 @@ Severity P0 blocks correctness or safe activation; P1 blocks the stated operatio
 | A06 | P1 CORRECT | E16 drivers/four E16 workers for every history and E8 streams are unmeasured starting assumptions | Four D8-class historical workers; smaller incremental and streaming profiles; scale after measured bottlenecks | 11 |
 | A07 | P1 CORRECT | A2 API control adds two workers despite the approved API decision specifying single-node compute | Restore separate single-node acquisition and receipt Jobs; preserve ownership and independence | 8, 11 |
 | A08 | P0 KEEP | Newer API decision separates REST acceptance from Bronze and rejects export bootstrap | Keep REST-only Python, one guarded Delta ledger, immutable evidence, accepted receipts and Auto Loader | 8 |
-| A09 | P1 SIMPLIFY | A2 adds Auto Loader after ADF for all SFTP packages although ADF already discovers exact deliveries | Controlled batch Bronze processing of verified explicit file membership; remove five redundant file-discovery checkpoints | 7, 9, 13 |
-| A10 | P1 CORRECT | A2 mostly assigns ADF SFTP duties and leaves other enterprise responsibilities implicit | ADF owns file acquisition, article scheduling, finite onboarding/recovery/reconciliation and batch dependencies; native Jobs own continuous capture and approved API schedules | 9 |
+| A09 | P0 CORRECT in A4 | A3 removed the required Auto Loader stage after SFTP acquisition | A4 restores five source-specific Auto Loader queries and native file checkpoints; see A4-01/A4-04 and §7 | 7, 9, 13 |
+| A10 | P1 CORRECT | A2 mostly assigns ADF SFTP duties and leaves other enterprise responsibilities implicit | ADF owns file acquisition, article scheduling, finite onboarding/recovery/reconciliation and batch dependencies; native Jobs own continuous capture; ADF owns the approved API acquisition/receipt schedules | 9 |
 | A11 | P0 CORRECT | Timed-out ADF activity is not proof a Databricks run stopped | Deterministic Jobs run-now token, run-ID lookup, actual terminal evidence, then controlled repair/new execution | 9, 16 |
 | A12 | P0 CORRECT | Separate Delta table writes cannot provide a single ACID publication | Same-table completion markers where needed; bounded stage receipts and frozen input versions; no global transaction claim | 13–15 |
 | A13 | P0 CORRECT | A2's “305 source rules” suggests 30 executable OFF predicates | Preserve 275 identified rules across seven contracts plus OFF's 30 prose categories. New OFF executable definitions need an explicit reviewed mapping | 3, 14 |
@@ -65,7 +98,7 @@ All eleven supplied files were read or matched against the existing complete ext
 | D10 | API CODEX IMPLEMENTATION DECISION.docx | 2af2702b08db1d40bd27abe67d8775debde522cf10e1e2237733204c5ff235b5 |
 | D11 | KAFKA CODEX IMPLEMENTATION DECISION.docx | b600caf945db56b3ec5d387c1de5b77af501043cdc51ca20350b12fdcf0996e9 |
 
-Precedence: this user's explicit boundaries govern; D10 supersedes conflicting older API proposals; D11 supersedes conflicting older Kafka proposals; D09 supplies downstream cadence/business objectives; otherwise D01–D08 retain their source semantics. A3 amendments are proposed, not silently active source-contract edits.
+Precedence: this user's explicit boundaries govern; D10 supersedes conflicting older API proposals; D11 supersedes conflicting older Kafka proposals; D09 supplies downstream cadence/business objectives; otherwise D01–D08 retain their source semantics. A4 and the retained A3 amendments are proposed, not silently active source-contract edits. A4-01 explicitly supersedes the A3 SFTP Auto Loader removal; OA-API-02 changes only the orchestration binding of D10.
 
 Existing work remains in the original workspace, including `rees46-kafka`, source contracts/evidence and `azure-databricks-data-platform`. No migration or implementation correction occurs in this phase. The inaccessible historical `source-contracts/contracts.v1.json` catalogue **has not been recovered or bytewise reconciled**. Existing extracted YAML and generated rules do not establish that it has.
 
@@ -101,7 +134,7 @@ R01 discovery/business rules; R02 registry; R03 schema; R04 behavior; R05 compat
 | R07 | REE-001…036 remain intact; no content dedup or invented currency/product FK; source-channel separation enforced (§14). |
 | R08 | Next-month first day02:00UTC, ADF10 min; R/B/S/G60/120/180/240 min, dashboard270 min, business08:00UTC (§17). |
 | R09 | Seed365 d after run, acknowledged supplier90 d, Raw/Bronze365 d, quarantine90 d, audit400 d; same revision exact bytes; retain r1/r2 (§12,18). |
-| R10 | Month, delivery/revision/attempt, original gzip hash + one-based logical CSV ordinal, manifest SHA and actual capture/ACK; later months cannot silently close March gap. |
+| R10 | Month, delivery/revision/attempt, original gzip hash + one-based logical CSV ordinal, manifest/capture-set SHA, native file checkpoint, per-file and delivery completion/ACK; later months cannot close a March gap. |
 
 ### 3.3 OpenFoodFacts JSONL — D03 R1, cadence D09
 
@@ -146,7 +179,7 @@ R01 discovery/business rules; R02 registry; R03 schema; R04 behavior; R05 compat
 | R07 | REV-001…036 intact; preserve two zero ratings, four negative helpful_vote values, blanks and full105,328-byte maximum observed record (§14). |
 | R08 | One original day per10elapsedmin; ADF1 min active/15 min recovery-only; initial FULL and daily stage targets fromD09 (§17). |
 | R09 | Original source active+365 d; exports≥90 d after ACK; Raw/Bronze365 d; stable original ordinal across replay; original history ends13Sep2023. |
-| R10 | Exact original-day/ordinal membership, immutable revision/parts/manifest, separate transport attempts, actual Bronze reconciliation then ACK. |
+| R10 | Exact original-day/ordinal membership, immutable revision/parts/manifest, native Auto Loader checkpoint, per-file/whole-delivery reconciliation and actual Bronze receipt before ACK. |
 
 ### 3.6 Campbell TOA5 DAT — D06 R1, cadence D09
 
@@ -161,7 +194,7 @@ R01 discovery/business rules; R02 registry; R03 schema; R04 behavior; R05 compat
 | R07 | DAT-DQ-001…040 intact; NAN/-99/+999 preserved/flagged by field; RECORD999 is legitimate; never interpolate missing source observations. |
 | R08 | Source due02:00UTC; replace Event Grid +5 min backup with1 min activeADF polling; maintain station-specific completeness and D09 targets (§17). |
 | R09 | Source active+365 d; acknowledged deliveries90 d; Raw/Bronze365 d; exact old headers for replay; no fabricated new logger epoch. |
-| R10 | Station/date/revision, logger identity, original file/ordinal, exact header fingerprint, bytes/SHA/row counts and independent station ACK. |
+| R10 | Station/date/revision, logger identity, original file/ordinal and four-header fingerprint, bytes/SHA/rows, native file checkpoint and verified delivery completion before independent station ACK. |
 
 ### 3.7 Open Prices REST — D07 R1 superseded where specified by D10
 
@@ -174,7 +207,7 @@ R01 discovery/business rules; R02 registry; R03 schema; R04 behavior; R05 compat
 | R05 | Material acquisition changes recorded asR2/2.0.0; source field evolution separately classified; no automatic MINOR. |
 | R06 | Missing pages/invalid IDs/bounds/envelope block acceptance; noncritical item failures retained with qualification, no loss of raw. |
 | R07 | OPR-DQ-001…045 retained at proper scope; export-only baselines do not become live count assertions; actual compared API/export fields only. |
-| R08 | Native15 min acquisition +5 min horizon;5 min receipt Job;30/15/45 min targets are gated by full scheduling/startup/publication arithmetic (§17). |
+| R08 | ADF exclusively schedules the existing acquisition/receipt Jobs at 15/5 minutes under OA-API-02; five-minute horizon and 30/15/45-minute targets retain all latency gates (§17). |
 | R09 | Raw≥365 d, evidence≥400 d, receipts≥365 d, native checkpoint protected; no source refetch for same retained accepted response. |
 | R10 | One ledger HEAD/commands/events, exact attempt/page/window/root manifests, post-acceptance receipts, target observation and WINDOW_COMMIT; separate native Auto Loader checkpoint. |
 
@@ -199,7 +232,7 @@ R01 discovery/business rules; R02 registry; R03 schema; R04 behavior; R05 compat
 |---|---|---|
 | AM-01 | Material transport/deployment; five SFTP contracts R04/R10 | Azure Blob SFTP replaces OpenSSH. Local publisher fsync is allowed; remote fsync/rename-overwrite is not assumed. Close, read-back integrity, unused-name finalization and READY establish publication. |
 | AM-02 | Material storage topology; A2 and D10 deployment binding | Separate SFTP account from WORM-capable lake account; preserve API semantics/retention. No payload schema change. |
-| AM-03 | Receiver orchestration; A2 | Remove SFTP Auto Loader. Verified explicit batch membership + same-target completion evidence replace file-discovery checkpoints; source/receiver identities unchanged. |
+| AM-03 | Superseded A3 receiver decision | **Revoked by A4-01.** Auto Loader is mandatory for all five SFTP sources; persistent native file checkpoints supplement receiver delivery/target completion evidence. |
 | AM-04 | Scheduling/SLO; D03/D04/D06 + D09 | OFF/metadata5→1 min active discovery; Campbell Event Grid primary removed in favor of1 min polling. Keep targets as runtime gates, not achieved SLAs. |
 | AM-05 | Existing simulated selection, not source evidence; D03 R04 | Ten OFF DELTAs selected as2,8,2,1,2,2,1,0,2,1 operations; endpoints2,10,12,13,15,17,18,18,20,21. Detailed key/action/fixture manifest remains a pre-activation gate. |
 | AM-06 | DQ definition gap; D03 R07 | No claim of30 original executable IDs. Review a project category→predicate mapping with exact operator, scope, severity, tolerance, owner and expected fixture before activation. |
@@ -210,7 +243,7 @@ R01 discovery/business rules; R02 registry; R03 schema; R04 behavior; R05 compat
 | AM-12 | Rule/metric qualification; D06 R07 and Gold | Preserve original sensor-quality predicates; specify the field-specific trusted-statistics dictionary/test oracle before advertising those metrics as qualified. |
 | AM-10 | Missing historical catalogue | contracts.v1.json remains unavailable. Before later contract migration, reconcile accessible R3 Word/current implementation differences; do not claim historic file recovery. |
 
-All amendments remain proposed until the user approves this architecture. Payload schema ordinals, semantic contract versions, infrastructure binding revisions and architecture revision are separate version domains.
+A4-01 through A4-10 and OA-API-02 are added to this controlled amendment register. Receiver ingestion protocol R2/2.0.0 governs accepted capture files, per-file completion and whole-delivery finalization; it does not rewrite source payload schema v1/v2 or claim a provider change. All amendments remain proposed until the user approves this architecture. Payload schema ordinals, semantic contract versions, infrastructure binding revisions and architecture revision are separate version domains.
 
 ## 4. Corrected topology, hosting and resource decisions
 
@@ -224,18 +257,22 @@ flowchart TB
   Host --> Supplier["Azure Blob SFTP account: five supplier folders"]
   Supplier --> ADF["ADF: actual SFTP connector, Binary Copy"]
   ADF --> Raw["Lake account: original Raw and manifests"]
-  Raw --> Batch["Verified controlled batch Spark ingestion"]
+  Raw --> Prepare["Source-specific validation and bounded capture-file preparation"]
+  Prepare --> AcceptedSFTP["Accepted capture data files; incomplete staging excluded"]
+  AcceptedSFTP --> SFTPAL["Five Auto Loader queries / persistent native checkpoints"]
   Journal --> Articles["ADF 15-minute wake-up; Databricks journal reader"]
   Connect --> HMTopics["H&M CDC + transaction + Connect internal topics"]
   Host --> REESTopics["REES46 behavior + compacted progress topics"]
   HMTopics --> Native["Native Kafka Structured Streaming"]
   REESTopics --> Native
-  REST["Open Prices REST"] --> Python["Serialized Python acquisition Job"]
+  ADF -.->|15-minute bounded Job dispatch| Python["Serialized Python acquisition Job"]
+  REST["Open Prices REST"] --> Python
   Python --> Evidence["WORM-capable lake HTTP evidence"]
   Python --> Ledger["One Delta acquisition ledger"]
   Ledger --> Receipts["Accepted leaf receipts only"]
-  Receipts --> AL["Auto Loader; own native checkpoint"]
-  Batch --> Bronze["10 managed Bronze tables"]
+  Receipts --> AL["API receipt Auto Loader; own native checkpoint"]
+  ADF -.->|independent 5-minute dispatch| AL
+  SFTPAL --> Bronze["10 managed Bronze tables"]
   Articles --> Bronze
   Native --> Bronze
   AL --> Bronze
@@ -245,6 +282,9 @@ flowchart TB
   Registry["Git release metadata; actual Kafka Schema Registry"] -.-> Host
   Registry -.-> ADF
   Registry -.-> Bronze
+  ADF -.->|onboarding / readiness / recovery| Connect
+  ADF -.->|bootstrap / monitoring / bounded recovery| Host
+  ADF -.->|eligible bounded processing and domain publication| Gold
   Control["4 shared operational controls; no offset DB"] -.-> ADF
   Control -.-> Silver
 ```
@@ -259,7 +299,7 @@ One DEV does not mean one storage account regardless of feature conflicts. The s
 | One Premium Databricks workspace + one discovered UC catalog | Distributed Spark, Jobs, managed Delta/UC | No additional workspace, environment or metastore | VM+DBU during compute; storage persists when compute stops |
 | One HNS GPv2 lake account, SFTP disabled | Raw, protected HTTP/evidence/receipts, seeds, mutable state and managed-table root if needed | Reuse compatible project ADLS account | GiB-month, operations, retrieval/egress; no hourly compute; retention costs persist |
 | One HNS GPv2 supplier account, SFTP enabled only in active windows | Actual managed SFTP endpoint; separate deliveries and ACK containers | Reusing lake conflicts with WORM; choose this minimum extra account | SFTP-enabled hours + storage/operations; disabling SFTP stops its hourly feature charge, not storage |
-| One ADF + Azure IR in selected region | Five real SFTP transfers, parameterized finite orchestration and monitoring | No SHIR unless public SFTP reachability is later prohibited | Activity/copy runtime/meters; no paid Mapping Data Flows selected; stop triggers outside service windows |
+| One ADF + Azure IR in selected region | PostgreSQL onboarding/articles, five SFTP/Auto Loader lifecycles, API15/5-minute dispatch, domain Gold, reconciliation and recovery | No SHIR unless public SFTP reachability is later prohibited | Activity/copy runtime/meters; no paid Mapping Data Flows selected; stop triggers outside service windows |
 | One Key Vault | Shared scoped credential references | No per-source vault | Operation/storage charges; retain required secrets safely |
 | One Access Connector MI/storage credential | UC lake access | Reuse suitable connector | No separate compute; do not mistake it for arbitrary SDK credentials |
 | One PostgreSQL Flexible Server, GP D2ds_v5-class,2 vCPU/8 GiB, initial128 GiB storage | Real H&M source, durable WAL/slots and backups; private connectivity | Shared self-managed database is cheaper nominally but increases contention/recovery work; managed selected (§6) | Compute while running, provisioned storage/backups while stopped; grow capacity before activation if WAL budget requires |
@@ -350,12 +390,12 @@ Reviews daily counts for1–13September2023 are **749,609,518,495,393,366,250,15
 2. **Seeds:** local originals; restricted lake copies; supplier cache retains exact gzip identities.
 3. **System:** managed SFTP endpoint and source publisher.
 4. **Initialize:** verify seed release; publish October initial month package; preserve complete original bytes and provenance.
-5. **Interface:** supplier SFTP → actual ADF SFTP Binary Copy → lake Raw.
+5. **Interface:** supplier SFTP → actual ADF SFTP Binary Copy → original lake Raw → verified accepted capture data → Auto Loader → Bronze.
 6. **FULL:** October42,448,764; historical onboarding can explicitly backfill the remaining contracted months without claiming a normal monthly run.
 7. **Changes:** subsequent month-close files; November r2 full-month replacement at ordinal108; April v2 sim_export_quality.
 8. **Publication:** next-month first day02:00UTC on the simulated source calendar; original late/missing/empty cases retained.
 9. **Discovery:** ADF10 min.
-10. **State:** source immutable delivery/revision + receiver source_deliveries and same-table Bronze completion; no Auto Loader after ADF.
+10. **State:** source immutable delivery/revision; one persistent Auto Loader checkpoint per source/query generation; receiver source_deliveries and actual per-file/delivery target completion.
 11. **Layers:** all captured revisions in Bronze; eligible revisions in Silver with one approved active revision per month; SFTP-only business activity/funnel Gold.
 12. **Recovery:** retry same revision exact bytes; new attempt identity; raw replay with stable ordinals; gaps hold contiguous completeness, not evidence retention.
 
@@ -365,12 +405,12 @@ Reviews daily counts for1–13September2023 are **749,609,518,495,393,366,250,15
 2. **Seeds:** restricted original/copy; no new dump or reprofiling substituted.
 3. **System:** independent source catalog/journal and managed supplier endpoint.
 4. **Initialize:** import only4,832,008 unambiguous keys into mutable canonical catalog; retain all123 exceptions in FULL provenance.
-5. **Interface:** actual SFTP → ADF → Raw → controlled Spark.
+5. **Interface:** actual SFTP → ADF Binary Copy → original Raw → validated capture data → native Auto Loader → Bronze.
 6. **FULL:** all4,832,131 original occurrences, original nested payloads intact; bounded package parts may be generated only with exact original ordinal mapping.
 7. **Changes:** ten source-journal DELTAs; INSERT/UPDATE/RETIRE/DELETE; selected21-operation allocation explicitly simulated; no upstream historical CDC assertion.
 8. **Publication:** hourly, within10 min after window close.
 9. **Discovery:**1 min while active, explicit amendment of5 min.
-10. **State:** source transactional sequence/action receipt/sealed membership; receiver delivery ledger and actual target receipts.
+10. **State:** source transactional sequence/action receipt/sealed membership; native Auto Loader file checkpoint and receiver per-file/whole-delivery completion receipts.
 11. **Layers:** original JSON/envelope Bronze; canonical current state plus identity-exception view in Silver; approved product view and catalog quality Gold.
 12. **Recovery:** same action returns same receipt; re-export same sealed membership; schema99/revision conflict holds range; no arbitrary duplicate-code winner.
 
@@ -380,12 +420,12 @@ Reviews daily counts for1–13September2023 are **749,609,518,495,393,366,250,15
 2. **Seeds:** restricted exact shard copies; source cache only.
 3. **System:** independent source catalog/journal and managed SFTP.
 4. **Initialize:** exact1,610,012-key import; initial versions0, snapshot boundary0, no synthetic original INSERT history.
-5. **Interface:** real SFTP → ADF Binary Copy → original Parquet Raw → native distributed reads.
+5. **Interface:** real SFTP → ADF Binary Copy → original Parquet Raw → verified schema-preserving capture data → Auto Loader → Bronze.
 6. **FULL:** all ten original shards; validate all footers/pages/native nested types and keyset/multiset.
 7. **Changes:** hourly journal exports preserve INSERT→DELETE and repeated UPDATE commits; explicit tombstones and RETIRE state; approved title-update fixture remains simulated.
 8. **Publication:** normal sealHH:30, followingHH:00; exact ten-export fault calendar retained.
 9. **Discovery:**1 min active by amendment.
-10. **State:** source head lock, contiguous sequence/per-key version/action receipt, sealed membership and distinct ACK high; receiver receipts.
+10. **State:** source head lock/sequence/version/action receipt, seal and distinct ACK high; native Auto Loader checkpoint plus verified file/delivery receiver receipts.
 11. **Layers:** complete physical snapshots/operations Bronze; case-sensitive current Silver; product dimension view, review relation and catalog quality Gold.
 12. **Recovery:** original same-revision retransmit; corrected Parquet schema/parts with new revision and same business membership; new business correction uses new journal sequence.
 
@@ -395,12 +435,12 @@ Reviews daily counts for1–13September2023 are **749,609,518,495,393,366,250,15
 2. **Seeds:** exact restricted original/copy.
 3. **System:** occurrence-preserving publisher and managed SFTP.
 4. **Initialize:** one streaming source pass assigns original line ordinal before selecting FULL/daily membership; no natural-key or payload dedup.
-5. **Interface:** actual SFTP JSONL gzip packages → ADF → Raw → distributed parsing.
+5. **Interface:** actual SFTP JSONL gzip → ADF → original Raw → capture data with verified original ordinals → Auto Loader → Bronze.
 6. **FULL:**43,883,164 pre-cutover occurrences.
 7. **Changes:**3,780 reserved original occurrences over13UTCdays; fixture-only CREATE/EDIT/RETRACT is not original edit history.
 8. **Publication:** one original day per10elapsedmin in the approved controlled replay; expectations stop at13Sep2023.
 9. **Discovery:**1 min active;15 min recovery-only, restoring1 min when time-sensitive work resumes.
-10. **State:** source exact day/ordinal allocation, immutable revisions and receiver delivery/commit receipts.
+10. **State:** source exact day/original-ordinal mapping, immutable revisions, native Auto Loader checkpoint and receiver file/delivery completion.
 11. **Layers:** full original lines/types/ordinal Bronze; occurrence Silver; original review activity/rating distribution and explicitly current-metadata association Gold.
 12. **Recovery:** stable original source hash+ordinal; disjoint baseline/day coverage; retransmit/replay cannot create another business occurrence.
 
@@ -410,12 +450,12 @@ Reviews daily counts for1–13September2023 are **749,609,518,495,393,366,250,15
 2. **Seeds:** unchanged originals/copies, native bytes/headers retained.
 3. **System:** station-aware gateway publisher and managed SFTP.
 4. **Initialize:** cut at10Jun2016 raw logger time; seven historical files41,105 rows;190station/day packages4,333 rows.
-5. **Interface:** actual SFTP → ADF binary DAT acquisition → Raw.
+5. **Interface:** actual SFTP → ADF binary DAT acquisition → original Raw → station/header-preserving capture data → Auto Loader → Bronze.
 6. **FULL:** seven contracted historical packages, retaining four native TOA5 header records each.
 7. **Changes:** original station-day observations and approved revisions/v2; explicit header-only CKPA2 zero days; no invented missing hours.
 8. **Publication:** next simulated day02:00UTC; raw observation time remains timezone unknown.
 9. **Discovery:**1 min activeADF; Event Grid removed by amendment.
-10. **State:** independent station/date/revision chains and ACKs; logger reset requires new verified epoch context.
+10. **State:** one persistent source Auto Loader query with independent station/date/revision completion and ACKs; logger reset requires verified new epoch context.
 11. **Layers:** lexical/header provenance Bronze; station-specific NTZ/units/quality Silver; comparable measurement/day summaries Gold.
 12. **Recovery:** exact old schema/header replay; later valid station packages may capture while the affected station's continuity is held.
 
@@ -429,7 +469,7 @@ Reviews daily counts for1–13September2023 are **749,609,518,495,393,366,250,15
 6. **FULL:** bounded REST historical windows from discovered A0 throughH0, live enumeration consistency only.
 7. **Changes:** overlapping created-time tail and weekly full historical REST re-observation; revisions observed, not full CDC/deletion history.
 8. **Publication:** provider-controlled, no provider availability/update SLA invented.
-9. **Discovery:** native acquisition15 min,5 min safety horizon; receipt Auto Loader Job5 min.
+9. **Discovery:** ADF schedules the approved acquisition Job every 15 minutes and independent receipt Auto Loader Job every 5 minutes; the five-minute API horizon is unchanged.
 10. **State:** one authoritative acquisition_ledger; distinct receipt-consumer native checkpoint and Bronze window markers.
 11. **Layers:** exact acquired item occurrences Bronze; observed representations Silver; latest observed price.id and currency-separated observation products Gold.
 12. **Recovery:** retained evidence reseal/receipt repair/target idempotency; new live traversal after interruption if incomplete; no stale-export bridge.
@@ -507,6 +547,28 @@ Each entity apply is deterministic and idempotent. A transaction-stage receipt i
 
 Monitor connector state, snapshot state, replication slot restart_lsn/confirmed flush positions, retained WAL bytes, source action receipts, transaction counts, source→broker→Bronze lag and source/target reconciliations. R3 WAL-budget warning/incident/admission protection thresholds remain50/75/85%. Never silently drop a slot to resolve disk pressure.
 
+### 6.5 ADF initialization, initial staging and snapshot-to-CDC cutover
+
+ADF has a real finite PostgreSQL onboarding workflow even though it does not copy every database table to ADLS:
+1. Verify pinned source/import release, database/role/schema readiness, network/TLS and source-owned import receipts.
+2. Admit or observe the approved initializer that loads the downloaded CSVs into the **real PostgreSQL source**. This is a source initialization action, not ingestion of those CSVs directly into Bronze.
+3. Validate exact initial counts, original purchase IDs, source NUMERIC/lexical round-trip and actual master/FK constraints. Keep new simulated mutations paused.
+4. Seal the article baseline and fixed visible journal J0; invoke its bounded JDBC capture workflow. Use sealed immutable images or a retained consistent source snapshot, not independent mutable range reads.
+5. Configure/activate one native Debezium initial snapshot for customers/purchases, with actual publication/slot/internal topic identity. Start native Databricks capture once its dependencies are ready.
+6. Wait for actual connector snapshot-completion evidence, correct source baseline capture, native position continuity and exact customer/purchase/source-membership reconciliation.
+7. Confirm article baseline and CDC handoff readiness, then authorize the source simulator's reserved replay. Thereafter Connect and Kafka capture continue natively; ADF does not restart them every 15 minutes.
+8. Record actual stage/target versions and cutover evidence in existing controls/evidence, not another CDC watermark.
+
+| Initial/staging option | Selected assessment |
+|---|---|
+| ADF PostgreSQL Copy → ADLS → Bronze for all customers/purchases, then independent CDC snapshot | Reject as the default: duplicates the approved baseline and needs a separately proven consistent snapshot/LSN handoff. Ordinary Copy partitions do not automatically share one repeatable-read snapshot. |
+| Sealed article baseline/journal via JDBC; Debezium's own consistent initial snapshot → Kafka → native Bronze | **Selected.** One native snapshot-to-WAL authority for CDC; bounded article units have source-sealed membership and actual target receipts. |
+| Immutable database export files for later huge historical recovery | Conditional future bounded recovery option only if a source-owned snapshot/export and matching position/membership are explicitly sealed and reconciled. Not SFTP, not an automatic second baseline. |
+
+No ADLS bulk staging is required for normal CDC records. Their full raw transport/envelope is durable in Kafka/Bronze; original source CSV seed copies and source audit manifests remain retained separately. Articles may retain bounded extraction evidence, but use their source journal/seal—not Auto Loader—as the acquisition authority.
+
+For a source/connector outage, ADF's recovery mode checks actual slot/offset/horizon and native run state, coordinates an exclusive repair/catch-up and verifies source-to-Bronze results. Re-extraction or resnapshot requires a declared generation/continuity decision, not ordinary JDBC polling presented as WAL CDC. The selected private networking and shared execution host already support these actions; no new service is needed.
+
 ## 7. Azure Blob SFTP publication, acquisition and ACK
 
 ### 7.1 Endpoint, identities and folders
@@ -537,39 +599,150 @@ Microsoft documents unsupported OpenSSH fsync extension, rename-over-existing er
 
 The supplier account has no WORM claim. Trusted publisher code enforces immutability and receiver hashes detect conflicts; original pinned seeds are outside its writable delivery container. The lake retains accepted evidence under separate protection. Microsoft explicitly lists container WORM supported for HNS but unsupported with SFTP enabled. [Storage feature matrix](https://learn.microsoft.com/en-us/azure/storage/blobs/storage-feature-support-in-storage-accounts)
 
-### 7.3 Exact acquisition sequence
+### 7.3 Selected SFTP flow and validation boundary
 
-**Parts finalized → manifest → READY → ADF discovery/control acquisition → plan validation → exact SFTP binary data copy → landed verification → Bronze commit → reconciliation → ACK.**
+**Downloaded seed → independent simulated supplier → Azure SFTP → ADF SFTP Binary Copy → original ADLS Raw → validated capture data files → Auto Loader → managed Bronze → eligible Silver → Gold.**
 
-ADF first reads/copies only the bounded READY and manifest control objects through SFTP. On detection, its preflight Databricks invocation validates exact manifest bytes/SHA against READY, source/generation/revision/schema, allowed paths, expected part names and source-side part metadata. Source GetMetadata supplies actual directory/part membership. No arbitrary paths or executable expressions are accepted. The returned frozen acquisition plan is small; it contains exactly the approved part list and input hashes.
+This applies to all five file integrations. “Incremental/DELTA” retains each source's meaning: monthly REES46 event files, OFF/Amazon journal operations, original review-day occurrences and Campbell station-day files. It does not turn all file sources into row-level CDC.
 
-ADF then ForEach-copies those parts **using the SFTP source connector and Binary format**, without decompression, to a unique lake Raw attempt. Do not substitute Blob-to-Blob Copy even though both endpoints are Azure Storage.
+ADF discovers READY, acquires bounded control objects through the SFTP connector and invokes the existing Databricks validation component. Preflight verifies source/revision, exact manifest bytes/SHA, schema release, allowed paths and the expected unique part set against source metadata. It returns a frozen small copy plan. ADF then copies exactly those source parts, using actual SFTP-source Binary Copy, to a unique Raw attempt.
 
-Post-copy Databricks independently streams every landed object for exact byte size/SHA, verifies source manifest/READY and exact part membership, then parses using the pinned adapter. ADF Copy success or an MD5 comparison is not a SHA-256 proof. Partial uploads, missing parts and changed same-revision manifests never produce accepted delivery markers.
+Databricks independently streams landed bytes to verify size/SHA/CRC, complete part membership, source schema/header and exact source scope. Raw becomes RAW_VERIFIED only after those checks. ADF Copy success, READY existence or a source-supplied count alone cannot establish acceptance. Incomplete attempts remain outside every Auto Loader input root.
 
-To keep small-package latency realistic, preflight and post-copy tasks may use the **same explicitly selected active incremental cluster** through existing-cluster Jobs during a controlled SFTP service window. They are separate run invocations around ADF Copy, not an assumption that unrelated job clusters share themselves. Start this cluster before incremental service begins, serialize writers per target, and drain before stopping it. Initial FULL/heavy work uses historical job compute separately. If cold job compute is selected instead, startup is included in the target and the five-minute Raw gate can fail; no availability claim hides that cost/latency tradeoff.
+All input bytes stay in their original native Raw files. Technical capture preparation described next does not replace Raw, change source identities, mutate supplier journals or perform Silver business transformations.
 
-### 7.4 Delivery state and correction semantics
+### 7.4 Source-specific capture data files: actual Auto Loader input
 
-Receiver state:
-`EXPECTED → SOURCE_READY → PLAN_VALIDATED → RAW_VERIFIED → BRONZE_CAPTURED → RECONCILED → ACKED`.
-Alternatives: `PENDING_READY, HELD, REJECTED, LATE, MISSING, CAPTURED_PENDING_PREDECESSOR, SUPERSEDED`.
+Native cloudFiles does not manufacture the original logical CSV/JSONL ordinal required by these contracts. A single large gzip stream also remains unsplittable. Select a bounded **receiver capture-data preparation task** in the existing Databricks validation workflow; no new service or Delta table.
 
-State is monotonic for a given immutable delivery/revision; transport retries have new attempt IDs. A valid empty file still has a schema/header and a completion marker. A missing predecessor holds contiguous completion; later data can be durably retained. Campbell chains are per station, not a single all-station blockade.
+It creates source-specific, explicitly schema-bound Parquet capture files after verified Raw. Auto Loader reads the actual data records in these files into Bronze. This is **not receipt-only Auto Loader followed by an unrelated manual data read**. The API's receipt-driven pattern remains separate.
 
-A higher revision is active only after complete source membership, schema, DQ disposition and target reconciliation. Physical correction reserializes the same sealed business operations; a business correction creates a new journal operation. REES46 November is the explicit full-month replacement policy, not an inferred CDC update.
+| Source | Required native validation and technical capture representation | What remains for Silver |
+|---|---|---|
+| REES46 CSV/gzip | Quote-aware nine-column reader, native header/CRC; original gzip identity and one-based logical data ordinal; exact original record bytes and all original lexical fields; approved v2 extension preserved | Trusted typing, accepted revision/month selection, business activity and correction conformance |
+| OpenFoodFacts JSONL/gzip | Stream original records; preserve original logical ordinal and full JSON bytes/open nested content; protected shallow fields only, with presence/null/type metadata | Canonical code/current state, explicit conflict population, journal apply; no forced flattening |
+| Amazon metadata Parquet | Native footer plus full page/schema verification; preserve exact case-sensitive parent_asin, all16native fields and images/videos structures; source shard reference and qualified physical row locator where available; FULL and DELTA share a receiver wrapper without changing their native payload semantics | Versioned current product apply, lifecycle/tombstones and review-reference conformance |
+| Amazon reviews JSONL/gzip | Original source ordinal assigned before FULL/day selection; full original line/nested content and millisecond clock retained; no content/natural-key dedup; known historical anomalies flagged | Typed occurrence projection, approved fixture lifecycle, parent-reference/business metrics |
+| Campbell TOA5 DAT | Exact four native headers, station/logger/schema-family binding, row widths and original lexical tokens; raw file/ordinal and header reference; no timezone assignment or universal sentinel conversion | timestamp_ntz, field/unit-specific quality and approved station-day revision selection |
 
-### 7.5 ACK boundary
+Use bounded capture parts targeting approximately128 MiB and at most200,000 source DATA rows per part, whichever boundary is reached first. A single record exceeding the qualified runtime envelope is held for an explicit capacity/reader decision; it is not truncated or split. An individual record stays intact; the maximum observed review record is105,328 bytes and is not truncated. Actual file size is measured—compressed size is not an executor-memory bound. Independent Raw files and native Parquet row groups can prepare concurrently; a single gzip initially decodes sequentially, then many capture files support useful distributed reads.
 
-ACK contains source/generation/delivery/revision, manifest SHA, source member/range identity, actual target table UUID/commit/version, physical/valid/quarantined counts, capture/conformance status and UTC receipt time. No predicted target version.
+For a complete original file, the quote-aware/logical-line counter binds directly to its pinned original identity. For filtered review FULL/day deliveries and Campbell station-day exports, use the publisher's verified per-record original-ordinal metadata or membership sidecar; a counter inside the filtered delivery is **not** the original global ordinal. Missing mapping holds publication. Never recover ambiguous ordinals by payload-hash matching, because repeated payloads are valid. For REES46 corrections/v2, retain both pinned original-source hash/ordinal for occurrence identity and the actual delivered revision's object hash/record bytes; a corrected gzip hash must not silently create new original occurrences.
 
-Issue a successful capture ACK only after durable Raw, complete Bronze membership and required source-to-target reconciliation. A warning-tolerated row is not silently dropped; capture-with-quality status is explicit where its source contract permits it. Critical sequence/identity/integrity failure holds ACK and source GC. Silver/Gold success is a separate publication obligation and is not falsely included in a capture ACK.
+The receiver capture schema is separate from the source schema/version. Each source has a pinned capture schema with technical provenance plus its source-specific payload; it is not a universal flattened business schema. Original source v1/v2, operation envelope, schema fingerprint, simulation/scenario and release remain visible. Approved optional simulator extensions use registered nullable receiver fields; unapproved protected changes are held before publication.
 
-If ACK upload loses its acknowledgment, retrieve/compare the fixed ACK bytes and repair idempotently. Do not re-apply Bronze because ACK is missing. Rejected/held feedback never masquerades as accepted ACK. Source retains unacknowledged work, and each original R09 retention remains binding.
+Each file contains:
+- DATA rows carrying source/delivery/revision identity, original occurrence or operation identity, original evidence/hash/ordinal where applicable, exact payload/typed native fields, source schema, origin/scenario, raw reference and DQ disposition.
+- Exactly one CAPTURE_FILE_CONTROL row containing the deterministic capture_file_id, expected DATA count and DATA-membership digest, source/capture schema and original header/evidence references.
 
-### 7.6 SFTP service windows
+The control row is technical, not an original source record. After validation, its metadata is materialized as a FILE_COMMIT target marker rather than a DATA row. It ensures a valid zero-source-row package still produces a discoverable file and completion evidence. It does **not** contain its own physical file SHA: that would be self-referential. Physical file length/SHA are stored in the external frozen capture-set manifest.
 
-SFTP is billed while enabled, including no-transfer hours. Enable before declared supplier/consumer windows, allow finishing copies and ACKs, and disable only after outstanding active transfers are drained. Deactivation outside a service window is not a false source outage; deactivation inside it is an incident. Late/recovery obligations require planned reactivation. Hourly/daily/continuous service cannot be advertised while the endpoint is disabled. [SFTP billing/enablement](https://learn.microsoft.com/en-us/azure/storage/blobs/secure-file-transfer-protocol-support#pricing-and-billing)
+A capture-set manifest binds the original source manifest/revision, verified Raw references, selected preparation generation/release, exact accepted paths, file IDs/hashes/lengths/DATA counts, source occurrence/operation coverage and schema fingerprints. Distinguish source generation from receiver preparation/consumer generations. Freeze the winning files; a retry cannot silently substitute different bytes under an accepted name.
+
+### 7.5 Publish only fully validated accepted files
+
+Use a mutable HNS **staging container in the existing lake account**, separate from WORM Raw/evidence and from mutable checkpoints. No additional account, event service or permission hierarchy is required.
+
+Publication order:
+1. Verify the complete original delivery in Raw.
+2. Write/close capture files under a preparation-only path that Auto Loader never lists.
+3. Verify capture-file structure, exact DATA count, source membership/content and schema; freeze the capture-set manifest.
+4. Reserve the existing source_deliveries transition for that fixed source/revision/capture set.
+5. Publish closed verified files into the accepted root using the actual ADLS Gen2 rename operation within the same filesystem, with non-overwrite conditions. Do not use dbutils.fs.mv as proof of atomic rename or asynchronous copy into a watched path.
+6. Reconcile every accepted destination to its frozen file identity and record AL_READY only when the whole selected set is published.
+7. ADF invokes the source's Auto Loader processing Job.
+
+The platform runtime principal has explicitly configured SDK authentication and staging-container write scope for this operation; the Access Connector is not an arbitrary SDK identity. Reuse the same principal/Key Vault credential boundary, not another per-source identity. Original Raw/evidence objects stay protected and are not renamed.
+
+Serialize accepted-file publication against that source's active availableNow query. A subsequent preparation may run outside the watched path, but cannot publish its set while the previous source query is active. Per-source Job admission, expected-state guards and terminal-run evidence enforce this; no time-expiring lease takeover. A partial publication remains PUBLISHING, never AL_READY; repair/reconcile it before the next query starts. If a failed/cancelled run on shared compute cannot prove all Spark/SDK writes quiesced, drain and terminate that shared cluster before takeover; a terminal Job flag alone is not proof that an uncertain physical operation stopped. An unexpected file with no matching AL_READY capture manifest is a poison input and fails the batch.
+
+HNS rename is a supported metadata operation; the exact SDK conditional behavior, active-query exclusion and UC/SDK access are qualification gates. Do not infer cross-account/cross-container atomicity. [ADLS namespace](https://learn.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-namespace) [Data Lake file SDK](https://learn.microsoft.com/en-us/python/api/azure-storage-file-datalake/azure.storage.filedatalake.datalakefileclient)
+
+### 7.6 Five persistent Auto Loader queries
+
+ADF invokes availableNow after AL_READY; there is no second native cron or per-delivery fresh checkpoint. One owning Job/query per SFTP source uses:
+- A fixed accepted input root for the source/source generation and compatible capture schema.
+- Its own persistent native checkpoint and schema location in state; never a checkpoint shared with another source, API, Kafka, delivery or incompatible recovery generation.
+- cloudFiles format parquet with an explicit source-specific receiver capture schema.
+- Directory listing; no Event Grid, Functions, notification queues or automatic event-resource provisioning.
+- includeExistingFiles=true for the first checkpoint initialization; allowOverwrites=false; cleanSource=OFF; no short maxFileAge or modifiedAfter shortcut.
+- Initial incremental maxFilesPerTrigger=8 and maxBytesPerTrigger=512 MiB; historical capture starts at32files/2GiB with appropriately bounded Parquet row groups to feed multiple workers. Both are qualified separately from Kafka settings. The byte option is a soft bound; it does not split an individual file across micro-batches.
+- No automatic business schema evolution. Select failOnNewColumns where supported by the pinned runtime, and independently verify every physical capture schema/fingerprint. An explicit schema/none mode alone can ignore new columns and is not drift enforcement.
+
+The SFTP queries consume capture **data** files; the separate API query consumes only accepted API receipt files. Neither queries the other's prefix or checkpoint. [Auto Loader](https://learn.microsoft.com/en-us/azure/databricks/ingestion/cloud-object-storage/auto-loader/) [Options](https://learn.microsoft.com/en-us/azure/databricks/spark/api-options) [Schema behavior](https://learn.microsoft.com/en-us/azure/databricks/ingestion/cloud-object-storage/auto-loader/schema)
+
+Before target writing, match source identity, actual accepted path/file ID and its external manifest against AL_READY; compare its DATA/control counts and schema. File metadata is bounded; source populations remain distributed DataFrames. Do not collect all records or a full monthly delivery into the driver.
+
+### 7.7 File-level idempotency and whole-delivery completion
+
+The selected SFTP sink uses foreachBatch with deterministic **insert-only MERGE** semantics for capture rows and technical markers. Native file tracking does not make arbitrary callback writes exactly once.
+
+DATA target identity is source instance/generation + logical delivery/revision + original occurrence ID or source operation ID. It is not micro-batch ID, Spark task order, payload hash or transport attempt. Same identity with different source content is an integrity hold. FILE_COMMIT identifies a particular frozen capture file and its manifest/membership; it is excluded from business row counts.
+
+For each bounded target write, required DATA rows and their FILE_COMMIT markers commit in one Bronze Delta transaction. Retries verify matching existing content/markers and add no duplicate source rows. All incoming rows must be consumed; exceptions propagate. Normal Kafka Bronze remains a native append sink and does not adopt this MERGE pattern.
+
+A delivery may span many micro-batches. Until every expected capture file is committed, Bronze can contain partial retained DATA, but no whole-delivery completion, successful source ACK or eligible Silver input exists.
+
+After the availableNow query terminates successfully, the **same owning processing workflow's finalizer**:
+1. Compares exact expected capture-file IDs/counts/hashes with FILE_COMMIT evidence.
+2. Independently reconciles original source ordinals/operations, row/content membership, valid/flagged/quarantined accounting and all required source checks against a frozen Bronze version.
+3. Holds on missing/extra/conflicting members, a broken source range or critical DQ.
+4. Inserts a deterministic DELIVERY_COMMIT in the same Bronze table for the complete logical source revision.
+5. Reads back the actual marker/Delta commit; repairs source_deliveries and reconciliation_results.
+6. Starts eligible Silver/product tasks and permits the source-specific ACK boundary.
+
+No whole-package ACID write is claimed. The final marker attests previously durable immutable member rows; its own actual Delta version is obtained after commit, never predicted inside its row. Quarantine/completion/current-revision views distinguish captured data from package-ready data.
+
+### 7.8 Native checkpoint versus delivery state
+
+| State | Sole responsibility | Does not prove |
+|---|---|---|
+| Supplier journal/manifest/READY | Original committed operations and immutable source membership | Receiver capture or business conformance |
+| source_deliveries + frozen capture manifest | Validated source/capture set, logical revision/continuity and actual completion receipts | Native file offset advancement |
+| Auto Loader checkpoint | Discovered files and successfully completed query batches | Whole source-delivery reconciliation or Silver/Gold publication |
+| Bronze DATA/FILE_COMMIT | Actual durable per-file source records | Complete package until DELIVERY_COMMIT |
+| Bronze DELIVERY_COMMIT | Exact logical delivery/revision captured and reconciled | Downstream Silver/Gold success |
+| ingestion_runs/dq_results/reconciliation_results | Stage outcomes, debt and evidence | A second file checkpoint or source journal |
+
+No new control table is added. Auto Loader discovery order is not source sequence order; Silver reads only completed eligible units and enforces predecessor/source-version rules.
+
+### 7.9 Delivery lifecycle, corrections and ACK
+
+Receiver lifecycle:
+EXPECTED → SOURCE_READY → PLAN_VALIDATED → RAW_VERIFIED → CAPTURE_PREPARED → PUBLISHING → AL_READY → BRONZE_PARTIAL → BRONZE_RECONCILED → ACKED.
+
+HELD, REJECTED, LATE, MISSING, CAPTURED_PENDING_PREDECESSOR and SUPERSEDED remain explicit. BRONZE_PARTIAL can be skipped for a one-batch delivery; it never grants completion. A later revision uses new accepted paths and source-revision identity; overwriting watched files is prohibited.
+
+REES46 November r2 becomes business-active only after its full replacement is reconciled; April v2 uses a registered decoder. OFF/Amazon operations retain every journal member, including multiple updates or INSERT then DELETE; corrected export serialization retains the same business membership. Reviews preserve all original FULL/day occurrences; Campbell handles each station independently, including header-only zero days and GNLA2 v2.
+
+ACK requires actual Raw integrity, whole-delivery Bronze completion and source-required reconciliation/continuity. It contains source/generation/delivery/revision, manifest/capture-set references, actual target UUID/version/marker, checkpoint reference, member counts and capture/conformance status. Do not ACK merely because Copy, one micro-batch, a FILE_COMMIT or the streaming Job succeeded without finalization.
+
+A matching lost ACK is repaired by exact receipt read-back, not data reapplication. Critical sequence/identity/DQ holds block accepted ACK/source GC. Silver/Gold publication remains separate from capture ACK; a Gold failure creates publication debt, not a source retransmission.
+
+### 7.10 Partial failure, restart and replay
+
+| Failure | Durable state and required recovery |
+|---|---|
+| Copy/Raw integrity failure | Retain failed attempt, no AL_READY. Retry exact source revision into a distinct attempt; no checkpoint affected. |
+| Preparation/publish crash | Reuse the frozen winning capture set; verify unused/identical final names and finish publishing. No query starts until the whole set is AL_READY. |
+| Some files/batches committed, later batch fails | Keep native checkpoint. Retry owning Job; callback MERGEs return matching prior effects. No DELIVERY_COMMIT/ACK for incomplete package. |
+| Target write committed, callback response/checkpoint completion lost | Resolve target markers and old writer termination. Replayed batch verifies existing records; native checkpoint completes only after callback succeeds. |
+| Auto Loader finished, finalizer failed | File checkpoint may legitimately be complete. Re-run finalizer on the same original delivery and actual target rows, even when availableNow discovers zero new files. |
+| Bronze finalizer succeeded, audit/ACK failed | Recover actual DELIVERY_COMMIT/commit identity and repair audit/ACK only. |
+| Checkpoint lost/corrupt | Pause owner and prove termination, preserve damage, restore coherent compatible state if possible. Otherwise rebuild in a declared consumer/recovery generation; no guessed file offsets. |
+| Retained accepted files unavailable | Rebuild from retained verified Raw with the pinned adapter into a declared new receiver capture generation. Do not pretend regenerated Parquet bytes/file history equal lost originals. |
+| Same-target repair | Permitted only with frozen source manifests, exact target row/marker identity uniqueness, content checks and proven single ownership; insert-only callback must be independently qualified. |
+| Untrusted target or incompatible state | Isolated recovery target/checkpoint, exact reconciliation and certified canonical-view cutover; preserve old evidence, no overlapping business UNION. |
+
+An unauthorized/corrupt accepted staging file is preserved by exact path/hash and investigated with the source query stopped. Restore a legitimate frozen file, or quarantine an unreferenced receiver artifact under a reviewed incident procedure. If native discovery state cannot resume, use the declared recovery-generation procedure and reconcile every legitimate capture set; never enable generic ignoreCorruptFiles or silently skip expected source members.
+
+Retain accepted capture data for 365 days alongside the source's replay obligations; no cleanSource deletes. Preparation-only unreferenced artifacts are rebuildable and use an explicitly reviewed cleanup policy after incident needs close, never checkpoint cleanup. Historical decoders and capture schema releases remain available.
+
+### 7.11 Service windows and latency/cost boundary
+
+SFTP enabled hours remain billable. Enable before supplier/consumer windows; finish transfer/ACK work before disabling. This does not require continuously running Auto Loader: ADF starts a finite availableNow query only for eligible/debt work, with its persistent checkpoint.
+
+Preflight and small post-copy/Auto Loader tasks may use the selected active incremental cluster during the declared service window. Historical preparation/capture/reconciliation uses the historical profile. All invocation, preparation, accepted-file publication, micro-batch and finalization time counts toward Bronze freshness; no extra polling schedule is inserted between AL_READY and its direct ADF dispatch. Actual latency and additional capture storage are qualification/cost inputs, not measured successes.
 
 ## 8. Open Prices API option audit and selected implementation
 
@@ -595,7 +768,7 @@ Auto Loader discovers cloud files. It does **not** call REST endpoints. ADF also
 | Cost | ADF activities plus custom processing; not automatically cheaper | Could avoid receipt-consumer discovery overhead | Small scheduled single-node consumer; measure actual startup/DBU cost |
 | Existing decision | Replaces D10 | Material removal amendment needed | **Preserves D10** |
 
-**Select C.** Auto Loader has a concrete role: independently discover retained accepted leaf receipts with native restart state, while acquisition can continue through a Bronze outage. Removing it does not remove the need to find/repair accepted-but-unconsumed work. Its bounded implementation is justified here. SFTP has a different upstream discovery model, so this does not imply Auto Loader everywhere.
+**Select C.** Auto Loader independently discovers retained accepted API receipts while acquisition can continue through a Bronze outage. Its callback validates ledger acceptance and reads that receipt's bounded immutable HTTP evidence. In contrast, the SFTP Auto Loader queries consume verified capture data files directly. PostgreSQL WAL and Kafka do not use Auto Loader.
 
 ### 8.2 REST bootstrap and bounded incremental handoff
 
@@ -665,72 +838,141 @@ Observation identity retains D10's canonical hash inputs: environment, original 
 
 Let A=accepted leaves, R=valid matching receipts, B=verified Bronze windows, F=native file history. A−R is publication debt; R−B is consumer debt; R−A is unauthorized evidence; B−A is an integrity failure. F alone proves neither acceptance nor Bronze completeness. Daily anti-joins plus each scheduled repair tick detect debt. Shared controls mirror these outcomes but do not advance the API frontier.
 
-## 9. ADF and Databricks enterprise orchestration
+### 8.6 ADF admission and independent API downstream orchestration
 
-### 9.1 Single ownership matrix
+ADF owns two independent schedule bindings under OA-API-02: 15-minute acquisition and 5-minute receipt/business processing. The corresponding native Job cron schedules must be absent/paused in the approved deployment; this document phase changes no runtime configuration. The selected A4 bindings require the same configured D10 Jobs with their actual runtime identities, single-node acquisition/receipt compute, max_concurrent_runs=1, queue disabled and unchanged ledger/native checkpoint boundaries.
 
-| Source / stage | Trigger owner | Orchestrator | Processing engine | State owner | Retry/recovery owner |
-|---|---|---|---|---|---|
-| H&M article journal polling | ADF15 min | Parameterized article pipeline invokes one configured Job | PostgreSQL JDBC + Spark | Source seals/ACK; target completion | Job retries sealed work; ADF reattaches run; next tick finds unACKed members |
-| H&M Debezium capture | Source/Connect supervision | Native Connect worker | PostgreSQL WAL + Kafka Connect | Slot + Connect internal offsets | Connect; source operator for slot loss |
-| H&M Kafka→Bronze | Native continuous Job | Databricks | Native Spark Kafka/Delta | Two native checkpoints | Databricks same checkpoint |
-| Five SFTP READY discovery | ADF source cadences | Shared discovery pipeline, source metadata | Azure IR SFTP GetMetadata/control Copy | Source READY; receiver delivery evidence | ADF bounded transport retries |
-| SFTP preflight / Raw | ADF after candidate | Shared acquire pipeline + preflight Job | Azure IR Binary Copy + Databricks integrity | Frozen manifest + source_deliveries + verified Raw | ADF copy; Job validation; never reapply committed data |
-| SFTP Bronze | ADF after all copied parts | Source processing Job | Distributed Spark versioned adapter | Same-table completion marker/target identity | Job's deterministic package replay |
-| API acquisition | Native Job15 min only | Databricks acquisition Job | Serialized Python + Delta control | Single acquisition_ledger | Same Job modes; persisted attempt/breaker rules |
-| API receipt→Bronze | Native Job5 min only | Independent Databricks receipt Job | Auto Loader + bounded decode/MERGE | Native checkpoint + Bronze markers | Native restart and A/R/B reconciliation |
-| REES46 producer | Source process clock | Host service supervisor | Independent Python/Kafka client | Transactional control topic | Same transactional lane; committed progress |
-| REES46 Kafka→Bronze | Native continuous Job | Databricks | Native connector/Delta append | Native stream checkpoint | Databricks; isolated recovery when needed |
-| SFTP/article Silver | Committed upstream readiness | Databricks task DAG invoked by ADF | Spark DataFrames/Delta | Target operation/revision markers | Same processing Job, version-guarded apply |
-| H&M CDC Silver/Gold | Eligible complete captured transaction/CDF | Native conformance task,60 s trigger | Spark foreachBatch/business apply | Native CDF checkpoint + actual stage commits | Same task; re-evaluate incomplete transactions |
-| API Silver/Gold | Verified Bronze debt | Receipt Job task dependencies / explicit finite catch-up | Spark; single-node for bounded increments, historical profile for accumulated work | Actual target/publication evidence | Job task repair; not acquisition rollback |
-| Batch Gold | Successful reconciled Silver unit | Databricks task DAG | Spark affected-group recomputation | Same-table product publication marker | Same Job task repair; retain publication debt |
-| Reconciliation | ADF finite schedule/manual; source-specific completion | Shared parameterized audit pipeline invokes Job | Distributed Spark exact comparisons | reconciliation_results + immutable report | Audit Job; blocks claimed completion |
-| Freshness/backlog/service-window checks | ADF5 min platform check; native notifications/metrics continuous | ADF monitoring pipeline + native alerts | Small Databricks checks only when needed | Existing controls/service telemetry | Designated DE operator; no duplicate ingestion schedule |
-| Manual backfill/recovery | Explicit operator request through ADF | Shared bounded recovery pipeline / existing source Job | Source adapter + Spark isolated target if needed | Original authority + declared recovery generation | Exclusive owner, terminal proof and runbook |
+An acquisition dispatch passes only allowlisted source/dataset, release, bounded run mode, nominal due-slot and ADF correlation. Normal created-time bounds and catch-up work are planned from the ledger, never supplied as an ADF watermark. Databricks owns one-request HTTP execution, deadlines, persisted retry/breaker, immutable evidence and atomic acceptance.
 
-ADF does not call Kafka/Debezium per event or micro-batch. It can activate/pause an approved continuous workflow at service-window boundaries and monitor it; it does not own its offsets. Native API schedules remain because D10 already specifies them. Article Jobs and ADF-invoked SFTP/batch Jobs have no second native clock.
+The receipt dispatch does **not** depend on the current acquisition pipeline succeeding. It drains legitimate retained accepted receipts and repairs window completion independently, then the same receipt/business workflow owns Silver observed history and G06publication. ADF monitors A/R/B/publication debt and initiates controlled replay through the same configured Jobs; it does not re-fetch accepted data or read the API through SFTP.
 
-### 9.2 Metadata-driven pipelines and bounded adapters
+ADF timeout/response loss requires run-ID/token reconciliation and actual old-owner termination; it cannot bypass D10's90-second margin or uncertain-attempt cooldown. Missed/queued ticks retain their outcome and coalesce from durable accepted coverage. The30/15/45-minute objectives include ADF dispatch/queue time.
 
-Static Git release metadata contains eight integration entries/ten operational entities, source adapters, interface/format, contract/schema fingerprints, secret references, permitted path roots, expected source calendars, Job IDs, target allowlists, source-specific DQ references and retention. Deploy an immutable release JSON to lake state; ADF Lookup reads the bounded version/hash. No extra metadata database and no dynamically evaluated SQL/Python from config.
+## 9. Enterprise-wide ADF orchestration and exclusive execution ownership
 
-Planned reusable ADF pipelines, created only after approval:
-- **discover:** Lookup release → Filter active/due sources → bounded ForEach → SFTP GetMetadata/Lookup READY → validate basic envelope → Execute acquire.
-- **acquire:** copy control evidence → preflight Job → exact Binary Copy ForEach → process Job → verify completion/reconcile → exact SFTP ACK.
-- **articles:** fifteen-minute admission → journal Job → task completion/ACK evidence.
-- **run_job:** Web run-now → persist/return run ID → Until/Wait/runs-get → terminal result/output; reusable for classic multi-task Jobs.
-- **reconcile_and_sla:** eligible source scopes, actual commits, gaps/backlogs, expiry/freshness and incident branch.
-- **backfill_recovery:** explicit source/generation/scope/target/release; pause/conflict guard; submit existing controlled Job mode; verify before cutover.
+### 9.1 Selected orchestration pattern
 
-Linked services: shared SFTP delivery/ACK bindings; ADLS via ADF MI; Key Vault; Databricks workspace API. Datasets parameterize allowlisted container/folder/filename and Binary/control JSON types. Use Lookup/GetMetadata, IfCondition, ForEach, ExecutePipeline, Copy, Web, Until, Wait, Fail and success/failure/skipped dependency paths. No Mapping Data Flow cluster is required to demonstrate distributed Spark; that work belongs to Databricks.
+**ADF coordinates eligible bounded source workflows and selected domain-product workflows. Databricks Jobs owns each submitted workflow's distributed task graph and data retries. Native services own continuous producer/connector/stream execution.**
 
-Use ADF Web→Jobs run-now with actual managed-identity authentication and an explicit ≤64-character idempotency token. This avoids assuming a newer serverless-oriented Job activity supports all selected classic-compute/idempotency controls. Official ADF documents managed-identity Web authentication; Databricks documents run-now token deduplication. [ADF Web activity](https://learn.microsoft.com/en-us/azure/data-factory/control-flow-web-activity) [Databricks Jobs API](https://docs.databricks.com/api/workspace/jobs/runnow)
+ADF is not limited to file movement: it owns database onboarding/article scheduling, five SFTP acquisition/Auto Loader lifecycles, both API schedules, cross-input product dispatch, reconciliation, SLA checks and operator-approved bounded recovery. It does not issue API pages, poll CDC tables, run individual Kafka transactions or invoke activities for Spark micro-batches.
 
-Small preflight output contains only plan URI/hash, exact scope, state and next action. It is not a large row payload; honor ADF Lookup/Web output limits. Parse/validate source manifests with a bounded reviewed adapter, not arbitrary code from metadata.
+One configured ingestion/job owner per source/query scope; one designated writer per Gold product. ADF transport retries reuse the same execution intent/token. They do not create another data run while the existing one is active or uncertain.
 
-### 9.3 Dependencies, retries and uncertain outcomes
+### 9.2 Mandatory ownership matrix
 
-A logical work key is source+generation+delivery/revision or sealed source unit+release compatibility. An execution intent adds an attempt ordinal. Jobs idempotency token hashes that fixed execution intent, not the current ADF retry ID. All transport retries of uncertain run submission reuse the token.
+| Source or processing stage | Scheduling owner | ADF responsibility | Databricks/connector responsibility | Authoritative state | Retry/recovery owner | Technical justification |
+|---|---|---|---|---|---|---|
+| PostgreSQL source initialization | Explicit ADF onboarding run, source owner authorizes mutations | Dependency checks, invoke approved source-init action, wait for exact source import receipts/counts | Source importer loads real PostgreSQL; no direct CSV-to-Bronze | Source import/action receipts, actual DB constraints | Source importer/operator; ADF reattaches execution | Source CSVs initialize the database rather than bypass its interface |
+| PostgreSQL initial snapshot | ADF finite onboarding workflow | Seal article baseline; activate one native Debezium initial snapshot; start/observe capture; enforce snapshot/cutover gates | JDBC captures sealed article baseline; Debezium consistently snapshots customers/purchases then WAL | Source seal/J0; connector snapshot/slot/offsets; native Bronze commits | Source/connector and their owning Jobs | ADF coordinates FULL without introducing a second inconsistent snapshot authority |
+| H&M articles incremental | ADF every 15 minutes | Submit exact bounded journal Job, monitor completion/reconcile/ACK; no native article cron | Job reads sealed PostgreSQL members, writes Bronze and article Silver; emits completed stage | Source journal/seal/ACK and actual target markers | Job data retries; ADF submission/observation | Fixed journal membership, not timestamp/MAXsequence polling |
+| PostgreSQL Debezium CDC | Native supervised connector | Once-per-window initialization/readiness, monitoring and controlled recovery only | Continuous pgoutput snapshot/WAL, native transaction metadata/offsets | Slot/WAL and Connect internal topics | Connect/source operator | No unnecessary scheduled restarts or ordinary table polling |
+| H&M Kafka Bronze | Native continuous Job | Coordinate initial dependency readiness, observe status/lag, request controlled recovery | Native Kafka-to-Delta capture/checkpoints | Native query checkpoints and Delta commits | Databricks native restart | Per-event/micro-batch ADF would add no correctness |
+| SFTP discovery and Raw staging—all 5 | ADF source-specific cadences | READY/manifest/preflight, exact membership/revision check, actual SFTP Binary Copy, validation dispatch | Existing validation task streams landed size/hash/schema | Supplier source manifest; verified Raw; source_deliveries | ADF transport retries; validator holds invalid input | Genuine SFTP acquisition, no Blob-to-Blob shortcut |
+| SFTP accepted-file publication | ADF processing workflow admission | Invoke/observe prepare/publish task after RAW_VERIFIED | Source-specific technical capture preparation, frozen manifest, accepted-path publication | Raw + frozen capture-set manifest and AL_READY state | Same source Job, guarded transitions | Excludes incomplete Raw and preserves original ordinals before cloudFiles |
+| SFTP Auto Loader Bronze | ADF directly after AL_READY; no second cron | Pass source/scope/release, invoke availableNow Job, verify finalizer/reconciliation, coordinate ACK | Native file discovery/checkpoint; per-file idempotent target writes; whole-delivery finalization | Auto Loader checkpoint + actual FILE_COMMIT/DELIVERY_COMMIT | Job callback/task recovery; ADF reattaches | Native file progress and source package completeness are different |
+| Open Prices acquisition | **ADF every 15 minutes only** | Run approved acquisition Job with bounded mode/due-slot/correlation; observe actual state; no provider Copy | Serialized Python, attempt budget, evidence/ledger/acceptance/receipt repair | Single acquisition_ledger | Same acquisition Job; ADF submission recovery | Preserve D10 technical ownership while extending enterprise scheduling |
+| API accepted receipts→Bronze | **ADF every 5 minutes independently** | Invoke existing receipt workflow regardless of last acquisition outcome; monitor A/R/B debt | Auto Loader on API receipts, bounded decode, atomic window capture | Native receipt checkpoint + Bronze window markers | Existing receipt Job | Accepted work remains consumable through an acquisition outage |
+| Kafka producer | Native host service +60×clock | One-time approved bootstrap/config/registry readiness; monitor progress; bounded replay/recovery requests | Independent source reader, transactions/fencing/control progress | Kafka committed producer summaries/progress | Producer/supervisor, source operator | ADF never handles individual records/transactions |
+| Kafka continuous consumer | Native continuous Job | Start once after readiness, monitor/failure escalation, controlled recovery | Native Kafka connector/read_committed/Delta append/checkpoint | Native query checkpoint | Databricks; exclusive recovery operator | No ADLS or Auto Loader in Kafka path |
+| Bronze→Silver, SFTP/API/articles | ADF admits bounded source workflow | Submit only eligible source scope; observe actual stage outcome/debt | Internal task dependencies and source-specific DQ/CDC/SCD | Completed Bronze markers/input versions, Silver target commits | Owning processing Job | ADF does not independently re-trigger the same internal Silver task |
+| Bronze→Silver, H&M CDC | Native60-second conformance task | Platform monitoring and bounded repair/cutover coordination | Complete native transaction membership/order; apply customer/purchase state | Native CDF/checkpoint + source operation/stage evidence | Native conformance Job | Low-latency continuous dependencies stay close to streaming data |
+| Silver→Gold G01/G02 | Native H&M conformance task | Observe publication/freshness; controlled bounded repair only | Sole writer; react to complete CDC and committed article history changes | Bound Silver versions + product commits | Same H&M task | Avoid source article and CDC workflows concurrently writing purchase products |
+| Silver→Gold G03/G05/G06 | ADF-owned source workflow | Submit source workflow; observe product task/reconciliation | Sole source-product task for REES SFTP, Campbell or API respectively | Eligible source Silver and product publication | Same workflow | Keep bounded B/S/G task dependencies in one place |
+| Silver→Gold G04/G07 | ADF domain-product dispatch, active 1-minute debt check | Admit ready Amazon review/catalog-quality scopes; freeze input readiness; no duplicate source-owned product writer | One designated Job per product, distributed transform/reconcile/publish | Required Silver versions + product marker | Domain-product Job | Shared inputs/products require one owner and explicit multi-input readiness |
+| DQ and reconciliation | Inline stage dependencies +ADF scheduled audit | Initiate independent bounded audits, monitor outcomes/holds | Original source-scoped predicates and distributed exact comparisons | Four shared controls/evidence + actual target/source identities | Owning check/task; DE operator for integrity hold | A pass must reference real evaluated scope; audit cannot advance native offsets |
+| SLA/freshness monitoring | ADF5-minute platform check; native alerts continuous | Due/calendar/debt/product checks, escalate, observe missed/queued runs | Existing status/check tasks, Spark/connector/broker metrics | Actual timestamps, controls and native telemetry | Named source/DE/business owners | Successful ingestion does not imply fresh Gold/consumer |
+| Manual replay/backfill | Explicit ADF operator invocation | Bound source/generation/range/release/target; enforce overlap guard; coordinate pause/recovery | Existing adapter/Job mode, native state or isolated rebuild | Original source/progress authority + declared recovery scope | Same owner after exclusivity/terminal proof | No new offsets database or parallel scheduler |
 
-| Condition | Required handling |
-|---|---|
-| Duplicate trigger | Same logical scope and execution intent; lookup/reuse actual run and target marker. No extra business application. |
-| ADF timeout/cancel, Databricks active | Record ORCHESTRATION_UNKNOWN; runs-get/reattach using run ID/token. Do not assume child cancellation or launch an overlapping writer. |
-| Job terminal failure | Establish no still-active writer; inspect target commits. Repair eligible failed tasks or admit a new execution intent without new source identity. |
-| Copy succeeds, Job fails | Retain Raw/plan; resume validation/processing from the same copied evidence. No fresh supplier operation. |
-| Uncertain Delta write | Resolve writer/target completion marker/version. Matching committed work repairs audit/ACK; unresolved old operation blocks takeover. |
-| Concurrent calls | Per owning Job max_concurrent_runs1; target/source scope admission guards; native queue disabled where approved. Shared-control guards are qualified, not assumed unique PK enforcement. |
-| Missed trigger | Next source tick enumerates retained READY/unACKed work; API derives coverage; native streams resume offsets. Separate missed-slot metric, no guessed advance. |
-| Source outage | Bounded retry/defer; no false empty delivery. Catch up within retained history after recovery. |
-| Silver failure | Bronze remains captured; hold downstream promotion; repair exact source unit. |
-| Gold failure | Silver remains committed; publication debt stays open; recompute affected groups from pinned inputs. |
-| Wrong source/release routing | Reject before acquisition/apply using fixed source/adapter/path/target/schema allowlists. |
-| Retry budget exhausted | Persist failed/held outcome and alert; no successful branch solely to finish an ADF run. |
+The same practical ADF source pipeline is parameterized for all five SFTP datasets. Source-specific parsing remains in its declared adapter; shared orchestration is not duplicated into five unrelated control systems.
 
-ADF owns between-service activities and the run handle. Databricks Workflows owns dependencies **inside** one processing execution: verify Raw → derive/parse → Bronze commit → DQ/reconcile → Silver → Gold → publish receipt. ADF does not separately trigger Silver while that graph already owns it.
+### 9.3 Seven reusable ADF pipeline patterns
 
-Downstream readiness requires the correct source/generation/revision, exact membership, passed/accepted DQ disposition, actual target UUID/version and completed dependency receipt. Copy success, a log message, a planned offset or a successful unrelated Job is insufficient.
+| Planned pipeline | Native activities and bounded purpose | Explicit ownership boundary |
+|---|---|---|
+| pl_sftp_discover | Schedule → Lookup immutable release → Filter due active sources → bounded ForEach/GetMetadata/READY control lookup → Execute acquisition | No data parsing/business logic or source operation generation |
+| pl_sftp_acquire | Control-object Copy → preflight Job → IfCondition/exact Binary Copy ForEach → processing/Auto Loader Job → verify delivery evidence → correct SFTP ACK | Owns between-service handoffs; Job owns prepare/AL/finalize/Silver/product task graph |
+| pl_pg_bounded | Manual onboarding or15-minute article trigger; database/source readiness checks; invoke approved initialization/snapshot/journal mode; Until actual completion | Does not poll customers/purchases for changes or restart Connect every tick |
+| pl_api_dispatch | Two parameterized schedule bindings: acquisition15minutes and receipts5minutes; run existing configured Job with fixed mode/release/correlation | No provider HTTP loop or second API cursor; no success dependency from acquisition to receipts |
+| pl_job_run | Web run-now with deterministic token → Until/Wait/runs-get → qualified terminal output; failure/completion branches | Same token on submission uncertainty; no blind new data attempt |
+| pl_product_or_audit | Product/readiness/DQ/reconciliation/SLA mode; Lookup dependencies → invoke the designated bounded Job → publish/alert branch | Only selected product IDs/scopes; does not compete with source-owned/native product writers |
+| pl_replay_recover | Explicit source/query/recovery generation and bounded scope; pause/terminal checks → existing recovery Job → reconcile/certify → controlled resume | Manual/approved recovery, not a general custom scheduler |
+
+Use shared SFTP delivery/ACK, lake/Key Vault and Databricks workspace connections; PostgreSQL read/source-operation references are separate appropriate bindings. ADF managed identity authenticates allowed Azure/Databricks management actions; source DB/SFTP/Kafka credentials remain in Key Vault or protected source runtime state.
+
+For private Connect/bootstrap control, use an approved existing source-host management action such as the predeployed lifecycle command invoked through Azure management, or an explicit operator gate. Do not expose Connect REST8083 or add a custom lifecycle service. ADF observes actual connector/snapshot state through existing read-only operational checks.
+
+Use Web→Databricks Jobs run-now for selected classic multi-task Jobs and token control, not an assumed serverless-only shortcut. ADF Web/Lookup outputs stay below documented limits; return small plan/status/evidence references, never source populations. No Mapping Data Flow cluster, Azure SQL metadata DB, Function, Event Grid or external scheduler is added.
+
+### 9.4 Metadata contract and routing
+
+Static, version-controlled release metadata contains:
+- source_id, dataset_id, entity and one of POSTGRESQL/SFTP/REST/KAFKA;
+- explicit approved adapter, connection/linked-service reference and secret references;
+- source cadence, trigger owner and configured Job/query IDs;
+- source/Raw/preparation/accepted input roots and bounded source scope;
+- source schema, receiver capture schema, DQ definitions/category mappings and fingerprints;
+- allowed Bronze/Silver/Gold targets and declared product owner;
+- required upstream marker/transaction/revision/coverage dependencies;
+- transport retry, Job/task retry, timeout, concurrency, queue/defer and service-window policies;
+- expected record/part/range reconciliation, accepted quality disposition and ACK requirement;
+- replay mode, source/receiver recovery generation, pinned release and compatibility class.
+
+Use immutable release JSON in the existing state storage for bounded ADF Lookup. No executable SQL/Python from metadata. Validate source/interface/adapter/path/target/release allowlists before submission; wrong routing fails closed.
+
+A readiness contract binds the actual source scope, manifest/capture set, completed upstream table UUID/version/marker, schema/release, DQ disposition, independent reconciliation reference and source-chain eligibility. The processing Job rechecks it; ADF activity success is only a run outcome.
+
+### 9.5 Bounded Job submission, retries and concurrency
+
+The logical source scope is stable across retries. An execution intent adds phase and attempt ordinal; its≤64-character hash becomes the Jobs idempotency token. Acquisition/preflight/processing are different phases, but a transport retry of the same submission uses the same token. Correlate ADF pipeline/run, execution intent, actual Job/run and source scope in existing ingestion_runs and native activity outputs.
+
+ADF owns **submission/observation transport retries**. Databricks owns **task/data retries** and source-specific idempotency. If an ADF activity times out while the child is active, mark ORCHESTRATION_UNKNOWN and reattach; cancellation of the parent does not prove child termination. Reuse the same run token; never launch an overlapping replacement.
+
+After a definite terminal failure, prove data-writer/Spark/SDK quiescence (or terminate the shared cluster if proof is unavailable), inspect target/native state and use controlled task repair or a new execution intent only after old-writer termination. API acquisition keeps D10 max_retries=0 at whole-Job level and persisted per-request retry/breaker budgets; ADF does not override them with generic whole-extractor retries.
+
+Each configured owning Job has max_concurrent_runs=1; API retains queue disabled. ADF pipeline concurrency is bounded. ADF can queue trigger instances: record queue age and have stale runs coalesce or return NO_DUE_WORK based on the actual source authority. Do not claim a missed slot executed successfully. The next API admission plans from its ledger/frontier and current safe horizon, not the old queued trigger's guessed window.
+
+### 9.6 Source workflow task boundaries
+
+| Source workflow | Internal Databricks task graph | ADF completion/readiness decision |
+|---|---|---|
+| SFTP source | Verify Raw → prepare/verify/publish capture set → availableNow Auto Loader → delivery finalizer/reconciliation → eligible source Silver → source-owned product if assigned | Require actual delivery completion/ACK boundary; product debt tracked separately |
+| Articles | Admit sealed baseline/journal → PostgreSQL capture → exact source/Bronze reconcile → ACK → article SCD2/stage receipt | No direct G01/G02 write; native H&M product owner reacts to committed article history |
+| API acquisition | Admit same configured owner → bounded REST planning/request/acceptance/receipt repair → due-slot outcome | Record acquisition outcome only; do not gate receipt pipeline on it |
+| API receipt/business | Accepted receipt Auto Loader → verified window completion → Silver observed representations → G06recompute/reconcile/publish | Same source Job graph owns these bounded stages; not an independent competing Silver/Gold schedule |
+| H&M continuous | Native capture plus independent native conformance/product task | ADF starts/monitors lifecycle, not per-trigger data task dispatch |
+| Kafka continuous | Native direct capture/inspection/checkpoint | Observe actual progress; no file staging or repeated scheduled restart |
+| Domain G04/G07 | Admit eligible debt → freeze required Silver versions → distributed business transform → exact reconciliation → one product publish | ADF owns this bounded workflow only; source workflows stop at Silver for these shared products |
+
+For a complete SFTP source revision, a later Silver/Gold failure never invalidates Raw or requires another supplier business operation. A retry must inspect target completion and continue the failed stage. Capture ACK follows its source contract; business publication/freshness has its own outcome.
+
+### 9.7 Single Gold writer and cross-source coordination
+
+| Product | Sole normal writer | Trigger/dependency behavior |
+|---|---|---|
+| G01hm_purchase_fact / G02hm_purchase_daily | Native H&M conformance/product task | Complete source transactions plus committed article-history changes; preserve pending-article policy and repair affected groups |
+| G03rees46_activity_daily | REES46 SFTP processing workflow | Completed approved month revision; Kafka cannot write this product |
+| G04amazon_review_daily | ADF-owned Amazon review product Job | Review Silver ready; bind approved metadata version for enrichment/coverage. Neither individual supplier workflow writes G04 directly |
+| G05campbell_station_daily | Campbell processing workflow | Eligible station-day revision, approved field dictionary; other stations do not block |
+| G06openprices_daily | API receipt/business workflow | Verified accepted observations and latest-observed selection; acquisition Job never writes Gold |
+| G07catalog_quality_daily | ADF-owned catalog quality product Job | OFF/Amazon domain scopes independent in one table; freeze actual source catalog epoch; source supplier workflows do not concurrently update G07 |
+
+The active 1-minute ADF product debt check is a **wake-up**, not a new business watermark. It admits bounded ready work and returns no-op when current. Immediate dependency dispatch and missed-work sweeps use the same product owner/intent rules. No native cron is enabled for these ADF-owned Jobs.
+
+Cross-source cases:
+- One source completes while another is delayed: publish only products whose declared inputs are ready. H&M/Campbell/API do not wait for Amazon/OFF.
+- Fresh review occurrences with stale/missing metadata: review activity can remain visible with METADATA_PENDING; enriched product/coverage views explicitly wait for a bound eligible metadata version. Never inner-join away original reviews.
+- Multi-input Silver/Gold: freeze exact required commit/transaction/revision versions and approved coverage; no arbitrary latest-table join.
+- A correction after Gold: the owning product Job recomputes old and new affected groups and reconciles before publishing; no additive retry.
+- Upstream failure when the next tick starts: attach/defer the same owner, inspect actual partial stage commits, and retain publication debt.
+- Manual backfill overlaps normal work: same configured owner or exclusive paused recovery scope; no second target writer.
+- Continuous stream with periodic products: native stream capture continues; a bounded product owner uses committed snapshots/CDF without controlling source micro-batches. The H&M low-latency native conformance exception remains explicit.
+- Bronze fresh but Gold stale: alert by product publication/input scope; do not mark enterprise lifecycle successful from ingestion alone.
+
+### 9.8 ADF and API scheduler migration
+
+OA-API-02 changes the **schedule binding**, not the REST/ledger algorithms: pause the old native acquisition and receipt cron triggers, verify no queued/active conflicting runs, deploy the two ADF schedule bindings stopped, validate actual Job identities/permissions, then enable ADF only after approval and runtime gates. Never leave both schedules active.
+
+Pass source/dataset, approved release, run mode, ADF correlation and nominal due slot; normal request bounds remain planned from the acquisition ledger. Bounded recovery/backfill parameters are separately allowlisted. The actual Databricks job/run identity still controls ledger ownership and shutdown proof. Receipt processing remains independent of acquisition success.
 
 ## 10. Kafka service and approved REES46 semantics
 
@@ -768,6 +1010,18 @@ After SOURCE_DRAINED, freeze control sequence and Bronze version. Prove all mont
 
 D11's existing55local tests and approximately10.7k/s short CPU benchmark are prior local evidence only. No tests were run in this architecture phase. They do not qualify managed Kafka, Linux hosting, Spark Python-worker overhead,85.2 h completeness, SLA or cloud cost.
 
+### 10.4 Appropriate ADF bootstrap, downstream and recovery role
+
+ADF may validate source seed/config/registry/topic readiness, invoke one approved finite bootstrap/start action, observe producer SOURCE_DRAINED/progress and coordinate bounded reconciliation/replay/recovery through the existing native owner. It does not publish records, commit producer transactions or run a workflow per Spark trigger.
+
+Continuous Jobs are started once per approved service window and supervised natively. ADF lifecycle checks return a bounded readiness/run handle; an ADF Until loop must not wait forever for an intentionally continuous stream to “finish.” The platform monitor samples run/lag/retention/coverage at practical intervals and alerts on debt.
+
+**Silver behavior:** an optional governed logical-event **view** over the canonical Bronze selects one valid source event ID for operational analysis, while all committed physical publications remain in Bronze. Same event ID with conflicting original-source content is an integrity hold, not arbitrary latest-wins. No new physical Kafka Silver table or general correction engine is introduced.
+
+**Gold behavior:** operational latency, partition/inspection/physical-versus-logical coverage views remain Kafka-specific. Actual durable commit timing comes from native progress/Delta evidence, not merely a pre-commit row timestamp. REES46 SFTP remains the sole G03business authority; Kafka never contributes another copy to that fact/aggregate.
+
+For native checkpoint/retention failure, ADF coordinates the approved pause, terminal-owner proof, isolated candidate, exact reconciliation and exclusive canonical-view cutover from§18. Source and native checkpoint authorities remain unchanged; no scheduled restart or ADLS/Auto Loader Kafka detour.
+
 ## 11. Distributed Spark profiles and execution design
 
 ### 11.1 Selected provisional profiles
@@ -804,13 +1058,17 @@ Concurrent quota at historical maximum includes9D8 nodes=72 vCPU,3incrementalD4 
 | PostgreSQL journal | Sealed exact IDs/read-consistent membership | Parallel bounded JDBC partitions of a fixed seal only; not arbitrary mutable PK-range polling. |
 | API | Serialized HTTP bodies and manifests | No HTTP parallelism; accumulated Bronze/Silver computations can distribute independently. |
 
-**Derived work plan:** a versioned bounded streaming reader processes each verified unsplittable original stream, quote-aware for logical CSV records. It assigns a counter before any filtering, excludes only the registered header, and emits bounded Parquet work parts containing original object hash, one-based original logical ordinal, exact original record bytes/reference, parsed fields and source schema. Use approximately128 MiB decoded target parts, without splitting a logical record. A descriptor retains exact count/ranges or membership digest and derived hashes. Source ordinal discontinuities caused by a legitimate FULL/daily selection are retained, not filled.
+**SFTP preparation and parallel capture plan:** use the source-specific versioned readers from§7 to create validated accepted Parquet capture data files after genuine Raw acquisition. Unsplittable streams initially decode sequentially; original ordinals are established before selection, or validated from the publisher's original-ordinal mapping for already filtered deliveries. Capture files retain exact delivered source representation and pinned original lineage. Do not reconstruct ordinals from Spark file order, timestamp sort or repeated payload matching.
 
-These are processing artifacts under state/work, not another accepted source, supplier journal or ingestion ledger. No accepted Raw object is replaced. A failed work task can be rebuilt deterministically; Spark speculative/task retries write unique temporary outputs and only a verified work-manifest selects the winning set. Exact original-file SHA is streamed in original byte order; a tree of partition hashes cannot be relabeled as that SHA.
+Target approximately128 MiB capture parts, bounded DATA row counts and approximately32 MiB Parquet row groups as initial measurement settings; historical Auto Loader starts with32files/2GiB per micro-batch, incremental with8files/512MiB. These soft limits do not prove memory safety or achieved throughput. Record actual native read tasks across workers and subsequent shuffle parallelism; tiny increments cannot manufacture large input parallelism.
 
-The reader must be qualified on actual UC/ABFS executor access and bounded memory in the selected runtime. Use a supported streaming InputFormat/reader rather than whole-file binary loading or driver collection. Parquet physical row provenance can use original shard/row-group/row-index where supplied by a qualified reader; business identity is exact parent_asin, not invented Spark task numbering.
+Prepared attempts remain outside the watched root. Only a frozen verified winning capture set is published to accepted staging; Auto Loader performs the actual DATA-file ingestion. Preparation task retries use unique temporary outputs and compare/freeze member sets before publication. Raw bytes and original whole-file SHA remain untouched. A tree of derived part hashes is not the original byte-stream SHA.
 
-Never use monotonically_increasing_id, partition number, input-file row order after a shuffle, payload hash, or a sum of partition counts as the original occurrence ID.
+These receiver capture files are not another external source or source journal, but they are retained, accepted Auto Loader inputs with physical file identities and native checkpoints. They are no longer described as merely disposable state/work artifacts as in A3. A separately declared recovery generation can rebuild them from verified Raw, without claiming regenerated Parquet bytes equal lost files.
+
+Qualify bounded UC/ABFS executor streaming readers in the selected runtime; no whole-file binary load or driver collect of huge gzip/JSONL. Preserve original Parquet field types and source shard/business identity; use a physical row locator only when actually supported/verified. Campbell's native four headers/NTZ semantics remain per-station. API HTTP stays serialized, and PostgreSQL/Kafka do not adopt this file preparation path.
+
+Never use monotonically_increasing_id, partition number, post-shuffle row order, payload hash or a sum of partition counts as original occurrence identity.
 
 ### 11.3 Spark execution, joins and maintenance
 
@@ -844,14 +1102,17 @@ No throughput, completion time, cluster adequacy or cost efficiency has been pro
 - `evidence/dev/openprices/work=<w>/traversal=<t>/page=<p>/attempt=<a>/body.bin`, response/validation/page manifests.
 - `evidence/dev/openprices/windows/<manifest_sha>.json`, `roots/<manifest_sha>.json`.
 - `evidence/dev/openprices/ready/v1/<acceptance_id>.json` — only accepted leaf receipts; separate prefix/volume from body storage.
-- `state/dev/checkpoints/<source>/<query>/generation=<g>/`.
+- `staging/dev/sftp/<source>/source_generation=<g>/prepared/<preparation_attempt>/...` — never watched by Auto Loader.
+- `staging/dev/sftp/<source>/source_generation=<g>/accepted/capture_generation=<c>/delivery=<id>/revision=<r>/...` — frozen verified capture DATA files only.
+- `state/dev/checkpoints/sftp/<source>/<compatible_query>/consumer_generation=<g>/` — five distinct persistent query scopes.
+- `state/dev/checkpoints/<source>/<query>/generation=<g>/` — other native source-specific checkpoints.
 - `state/dev/schema-state/<source>/<query>/generation=<g>/`.
 - `state/dev/work/<run_id>/` — rebuildable bounded derived artifacts.
 - `state/dev/releases/<release_sha>/...` — immutable released config; never a credentials directory.
 - `managed/` only if required for the discovered catalog's managed root; never overlap external volumes.
 - `tfstate/dev/` mutable locked infrastructure backend, only after later infrastructure approval.
 
-Use UC external locations/volumes for needed Raw/evidence/state roots. No DBFS mounts, fabricated managed-table paths, overlap with managed Delta directories or public seed access.
+Use UC external locations/volumes for needed Raw/evidence/staging/state roots; staged capture publication and its reader use the same actual lake account, with non-overlapping locations. No DBFS mounts, fabricated managed-table paths, overlap with managed Delta directories or public seed access.
 
 ### 12.2 Completion and immutable storage
 
@@ -861,7 +1122,7 @@ Use supported **container-level** WORM on the lake evidence container, with mini
 
 Raw acceptance uses immutable finalized attempt objects and target-bound hashes. Select 365-day container-level WORM for finalized Raw. Use the actual ADF SFTP source with a Binary new block-blob commit sink on the HNS lake account; the lake remains ADLS Gen2 even when its Blob REST protocol performs the write. Qualify this exact multipart/new-object path before enabling the policy. Never assume arbitrary ADLS create/append/overwrite works under WORM. No completion receipt is emitted for an incompatible/partial sink write.
 
-No WORM or automatic lifecycle expiry on Delta logs/data/checkpoints, active source journals or native schema/checkpoint directories. Retention locks and legal/rights compatibility need separate explicit authorization; the architecture itself does not irreversibly lock400 days of storage.
+Accepted capture staging is logically immutable under the single-owner protocol and normal container-level authenticated access, but is not under WORM because its preparation-to-accepted HNS rename must work. Keep WORM on original Raw/evidence as selected. No special READY ACL hierarchy or per-folder identity is introduced. No WORM or automatic lifecycle expiry on Delta logs/data/checkpoints, active source journals or native schema/checkpoint directories. Retention locks and legal/rights compatibility need separate explicit authorization; the architecture itself does not irreversibly lock400 days of storage.
 
 ### 12.3 Retention matrix
 
@@ -874,6 +1135,7 @@ No WORM or automatic lifecycle expiry on Delta logs/data/checkpoints, active sou
 | H&M/REES Kafka data |14 days actual append-time policy and adequate capacity | Broker owner; earliest-offset/horizon checks |
 | REES producer summaries/progress; Connect internals | Active/dependent replay lifetime; summaries/audit≥400 d as selected | Unique keys, no destructive delete TTL/tombstones; archives don't become another offset authority |
 | SFTP Raw/Bronze |365 days from acquisition/commit, rights permitting | DE; keep exact source/decoder references |
+| SFTP accepted capture data/manifests |365 days; capture manifests/evaluation audit400 days; active/dependent native checkpoint obligations unchanged | DE; no cleanSource deletion; regenerated files require a declared preparation/recovery generation |
 | API encoded Raw |≥365 days; selected evidence container400 d | Acquisition owner |
 | API manifests/evidence |≥400 days | Acquisition/governance |
 | API accepted receipts |≥365 days; selected400 d | Acquisition publisher; retained for file rediscovery |
@@ -891,7 +1153,7 @@ Delta log retention400 d does not imply400 d time travel if obsolete data files 
 
 Bind the actual available workspace UC catalog after deployment; reject hive_metastore/system and do not invent “main.” Use schemas bronze, silver, gold, control and files. **Every physical table below is a managed Delta table.** Raw files and volumes are not managed Delta tables. Logical keys are enforced by guarded single writers/validated source uniqueness, not by informational PK declarations.
 
-A2 inventory10Bronze/10Silver/5Gold/5control becomes **10Bronze/9Silver/7Gold/5control =31normal physical tables**. Remove the duplicate off_identity_exceptions physical copy in favor of a view over retained Bronze. Add meaningful H&M purchase fact and catalog-quality products; retain daily aggregates with explicit business definitions. Isolated recovery tables are temporary declared recovery targets in DEV, not a second environment or a permanent parallel data platform.
+The A3 normal inventory remains **10Bronze/9Silver/7Gold/5control =31normal physical tables**. Auto Loader state and accepted capture files are native file state/artifacts, not additional managed Delta tables. Retain A3's off_identity_exceptions view over Bronze rather than a duplicate physical copy, and retain its H&M business fact/catalog-quality products and defined daily aggregates. Isolated recovery tables are temporary declared recovery targets in DEV, not a second environment or a permanent parallel data platform.
 
 Common Bronze columns: source/generation/release/schema, logical record or operation identity, record_kind, original evidence reference/hash/ordinal where applicable, operational arrival/commit clocks, DQ disposition and replay lineage. Append/control markers are excluded by business views. All captured rows—including classified row errors—are accounted for. Full physical corruption can block parsing while its exact Raw attempt remains retained.
 
@@ -902,15 +1164,17 @@ Common Bronze columns: source/generation/release/schema, logical record or opera
 | hm_articles | Baseline article or journal member; source generation+article/version/operation; sealed completion marker | Fixed seal capture; one target transaction per bounded complete seal; source journal ACK only afterward | D01;365 d; PostgreSQL journal→capture; exact seal/raw image replay |
 | hm_customers_cdc | Physical Kafka record; cluster/topic UUID+partition+offset | Native append, own checkpoint; retain full source envelope | D01;365 d; Connect→Kafka; native restart/isolated recovery |
 | hm_purchases_cdc | Physical purchase or native transaction metadata/tombstone record, record_kind explicit | Native append, own checkpoint; no false cross-table atomicity | D01;365 d; purchase/transaction topics; membership reconciliation |
-| rees46_sftp | Original occurrence per captured delivery revision + completion marker | Complete verified package append/target transaction; deterministic source ordinal, revision retained | D02;365 d; Raw→adapter; all old revisions preserved |
-| off_products | Original FULL occurrence or supplier journal operation + completion marker | Preserve full raw JSON/open schema; exact range/exception accounting | D03;365 d; Raw→adapter; no conflict-code winner |
-| amazon_metadata | Snapshot product row or committed operation + completion marker | Exact native types; source version/range guarded; snapshots not synthetic journal inserts | D04;365 d; Parquet Raw; exact historical decoder |
-| amazon_reviews | Original review occurrence or explicitly isolated fixture op + completion marker | Source SHA+original line ordinal; never content dedup | D05;365 d; Raw→adapter; day/full membership replay |
-| campbell | Native station observation + package marker; headers referenced/pinned | Original file/ordinal and station/logger context; record/date/revision retained | D06;365 d; Raw→station parser; empty header-only packages still complete |
+| rees46_sftp | Original occurrence per delivery revision plus FILE_COMMIT/DELIVERY_COMMIT | Auto Loader data files→idempotent per-file/batch MERGE; package finalizer verifies complete source ordinals/revision | D02;365d; Raw→capture adapter→Auto Loader; all old revisions preserved |
+| off_products | Original FULL occurrence or journal operation plus file/delivery markers | Auto Loader capture DATA preserves full JSON/open content; exact source range/exception accounting | D03;365d; Raw→capture adapter→Auto Loader; no conflict-code winner |
+| amazon_metadata | Native snapshot product or committed source op plus file/delivery markers | Auto Loader on schema-bound capture DATA; exact native types/version/range; snapshot not synthetic INSERT history | D04;365d; native Parquet Raw→capture→Auto Loader; old decoders retained |
+| amazon_reviews | Original review occurrence or isolated fixture op plus file/delivery markers | Auto Loader capture DATA; verified original source ordinal mapping; never content dedup | D05;365d; Raw→capture→Auto Loader; FULL/day membership replay |
+| campbell | Native station observation plus file/delivery markers and exact header reference | Auto Loader capture DATA retains raw file/ordinal, logger/date/revision; explicit control row represents a zero-source-row file | D06;365d; Raw→station capture adapter→Auto Loader; no timezone invention |
 | openprices_capture | ITEM, WINDOW_COMMIT and WRITER_HEAD | One guarded same-table window MERGE; observation_id from D10; Auto Loader checkpoint afterward | D07+D10;365ddata/400dminimal audit; accepted ledger/receipts→decode; idempotent replay |
 | rees46_kafka | Every committed physical Kafka record, including malformed/unknown-ID rows | Direct native append/checkpoint; original key/value/timestamp/type/ordered headers unchanged | D08+D11;365 d; Kafka only; certified isolated cutover |
 
-For SFTP, DATA+DELIVERY_COMMIT are committed in the same target transaction after complete membership validation; a valid empty package commits a marker with zero data rows. Reuse deterministic transaction identity/target marker on retry. After an uncertain write, prove the old writer finished, then inspect the actual marker/table version. Shared control failure cannot authorize another append. Future implementation must prove this for large distributed writes, not use an unbounded driver list.
+For SFTP, DATA and FILE_COMMIT are atomic within each idempotent bounded target write; a delivery can span multiple committed micro-batches. After native query completion, the finalizer proves exact complete membership and writes DELIVERY_COMMIT. Until then, partial raw Bronze is retained but not business-ready. Empty source packages have technical file-control/commit rows and zero DATA rows.
+
+Compare logical source content independently of transport attempts, capture-file IDs and ingestion clocks; these operational fields must not make an identical source occurrence appear changed. Same source identity/revision with different payload is a hold. Target markers carry deterministic identity and previously observed evidence, never a guessed version of their own Delta commit. Resolve actual commit evidence after writer quiescence and repair audit/ACK without reapplication.
 
 ### 13.2 Nine Silver tables
 
@@ -947,18 +1211,18 @@ Physical Gold products retain data rows and a distinguishable publication marker
 | Table | Logical key and columns needed | Writer and purpose | Retention / recovery |
 |---|---|---|---|
 | ingestion_runs | execution_intent_id+stage/task; source/generation/release, parentADF/runID, actual Job/run, attempt, status, start/end, input/target UUID/versions, errorclass, publication/recovery scope | Controlled Job stage writer; records actual outcomes/debt and execution handles. Does not replace native checkpoints |400dminimal; target commit evidence repairs missing audit |
-| source_deliveries | source+generation+logical_delivery+revision; manifesthash, exact source range, predecessor, attempt references, state, expected/actual counts, target marker, ACK URI/hash, row_revision | Preflight/receiver transition writer with expected-state/version guard; logical continuity and accepted capture receipts |400daudit plus active obligations; rebuild from source seals/Raw/target evidence |
+| source_deliveries | source+generation+logical_delivery+revision; manifesthash, exact source range, predecessor, attempt references, state, expected/actual counts, capture-set URI/hash, expected file IDs, checkpoint/consumer-generation reference, target markers, ACK URI/hash, row_revision | Preflight/receiver transition writer with expected-state/version guard; logical continuity and accepted capture receipts |400daudit plus active obligations; rebuild from source seals/Raw/target evidence |
 | dq_results | execution+rule/approved category definition+scope+evaluation ID; rule release, evaluated/failed counts, severity/disposition, evidence URI/hash and status | Rule executors append/upsert deterministic evaluation IDs; stores results, not another rule catalogue |400dminimal; rerun only with explicit evaluation identity |
 | reconciliation_results | execution+scope+comparison spec; expected/actual counts/membership/digests, target UUID/version, PASS/FAIL/NOT_EXECUTED, reporthash | Independent checks; capture/business/full-coverage status |400 d; retain frozen inputs/files for a certificate's validity |
 | acquisition_ledger | environment+row_id; HEAD/COMMAND/EVENT fields and guarded epochs/revision | **API acquisition identity only**; authoritative API frontier/attempt/acceptance state |D10retention; controlled restore and event reconstruction |
 
-Control writes from different scopes are not assumed globally serialized or uniquely constrained by Delta PK declarations. Use deterministic IDs, validated uniqueness, permitted writers and Serializable guarded transitions; race tests are a future P0 gate. No new Azure SQL, DQ-rule Delta catalogue, universal offsets table, source authorization DB or separate publication table.
+SFTP's native file progress remains in its five checkpoints. The capture-set/FILE_COMMIT audit references do not form a duplicate offsets database. Control writes from different scopes are not assumed globally serialized or uniquely constrained by Delta PK declarations. Use deterministic IDs, validated uniqueness, permitted writers and Serializable guarded transitions; race tests are a future P0 gate. No new Azure SQL, DQ-rule Delta catalogue, universal offsets table, source authorization DB or separate publication table.
 
 ### 13.5 Atomicity and business visibility
 
-Native Kafka sink completion is its Delta commit/native epoch, not a manually inserted offset row. SFTP package rows+completion marker and API item rows+window marker are same-table atomic units. Source mutation+journal/action receipt is a source transaction. Kafka behavior+summary+progress is a Kafka transaction.
+Native Kafka sink completion is its Delta commit/native epoch, not a manually inserted offset row. SFTP DATA+FILE_COMMIT are same-table atomic per bounded write; whole delivery completion is a subsequent independently verified marker, not package-wide ACID across micro-batches. API ITEM rows+WINDOW_COMMIT retain D10's atomic window unit. Source mutation+journal/action receipt is a source transaction. Kafka behavior+summary+progress is a Kafka transaction.
 
-Silver tables and Gold tables commit independently. A stage receipt references actual completed target UUID/versions and exact source scope. Dependent work reads those frozen versions and verifies all required markers before starting. No stage reports success because one of several required table writes succeeded.
+Silver tables and Gold tables commit independently. A stage receipt references actual completed target UUID/versions and exact source scope. Silver reads only SFTP DELIVERY_COMMIT units, verified API WINDOW_COMMIT units or complete native CDC transaction stages; FILE_COMMIT alone is not sufficient. Dependent work reads those frozen versions and verifies all required markers before starting. No stage reports success because one of several required table writes succeeded.
 
 Gold materializations recompute affected groups, including deleted old groups, and update business rows+the product's publication marker in one target transaction. A reader sees one Delta snapshot; audit repair after that commit does not reapply the data. A cross-product “all domains published together” transaction is not offered.
 
@@ -1006,7 +1270,7 @@ Essential source-specific rules:
 | API | OPR-DQ-001…045 | Pinned export checks only for that offline release; live envelope/window/request; raw bytes/observation; accepted/Bronze/replay/security |
 | Kafka | KAF-DQ-001…046 | Seed/identity; serializer/routing; transaction/fencing; raw inspector; native checkpoint; full physical/logical reconciliation; isolated destructive tests |
 
-All275identified predicates retain their original wording, severity, owner, tolerance and fail disposition under their hash-pinned source authorities; A3 does not silently rewrite them into different operators. The30OFF categories add obligations, not30 claimed successful/executable tests. No new rule catalogue is stored in Delta; Git holds approved definitions, dq_results holds evaluations.
+All 275 identified predicates retain their original wording, severity, owner, tolerance and fail disposition under their hash-pinned source authorities; A4 does not silently rewrite them into different operators. The30OFF categories add obligations, not30 claimed successful/executable tests. No new rule catalogue is stored in Delta; Git holds approved definitions, dq_results holds evaluations.
 
 For OFF, the future mapping must explicitly separate seed-release assertions, per-row predicates, global code conflicts, source transaction invariants, package membership and operational faults. Example: “conflicting duplicate-code detection” is an exact grouped identity comparison plus canonical exclusion, not code IS NOT NULL. “Open-content preservation” requires raw/parsed round-trip membership evidence, not an invented closed334,949-column schema. Missing operator/tolerance/fixture status is UNQUALIFIED, not PASSED.
 
@@ -1207,6 +1471,20 @@ GLBA_BARTLETT27 fields, GLBA_NUNATAK_QUEEN21 fields, KLGO_T10720 and KLGO_T10920
 
 Consumer refresh/caching is separately measured. No dashboard has been implemented or proven available. Publication/query fixtures later validate the stated consumer questions and KPIs, including a late correction after a product was already published.
 
+### 15.3 A4 Gold refresh ownership, modes and consumer handoff
+
+The business catalogue and seven physical products remain unchanged. The exclusive writer/trigger matrix in§9.7 is authoritative; a source workflow must not also write an ADF domain-owned product.
+
+For G04 and G07, ADF checks eligible publication debt at one-minute active intervals and may request an immediate dependency dispatch through the same owner. The Job first freezes a valid input-version set or returns NOT_READY/NO_DUE_WORK without a full transformation. Unrelated domains do not wait for each other.
+
+**FULL refresh:** first business publication, approved transformation/schema migration or a bounded rebuild after source CDF/version history is unavailable. Validate a candidate or bounded replacement scope before atomic product publication. Do not silently erase the old published product.
+
+**Incremental refresh:** use committed changed-key/old/new input evidence to recompute affected groups. Inserts, updates, deletes and late corrections affect both former and new groups; empty groups are removed. A retry verifies the product's actual publication marker and returns its existing effect. Product input-version/publication metadata does not become another source acquisition watermark or offsets table.
+
+Only publish when required Silver versions, exact source scope, DQ disposition and business reconciliation pass. If a product is stale despite fresh Bronze, record publication debt/incident independently of ingestion success. Missing Amazon metadata may defer enriched/coverage products while original review counts remain explicitly unenriched.
+
+When a real reporting consumer is configured, ADF can invoke its allowlisted refresh endpoint after a verified product publication and record the actual refresh/query outcome. Until that consumer and credentials/licensing are present, keep the step NOT_CONFIGURED; neither a successful Gold Job nor a proposed cache interval proves dashboard freshness. No dashboard service is provisioned by this architecture correction.
+
 ## 16. Production success/failure scenario catalogue and safe demonstrations
 
 **Every future test below is NOT EXECUTED in this phase.** Existing source calendars and source-specific test IDs in D01–D11 remain additional obligations; this risk catalogue does not replace them. It covers realistic selected risks, not every theoretically possible failure.
@@ -1340,6 +1618,23 @@ Future demonstrations use an explicit fixture/recovery namespace **inside the sa
 
 Each run records fixture seed/release, fault name/location/time, expected outcome, scope, actual Spark/ADF/connector evidence, target UUID/versions, recovery result, measured cost and cleanup decision. Cleanup is reviewed and respects retained incident evidence; no blanket recursive deletion.
 
+### 16.9 A4 Auto Loader and orchestration qualification additions
+
+These ten scenarios extend the retained 75-scenario risk catalogue. They are **NOT EXECUTED**. Use the same isolated DEV fixture/target rules and twelve-field evidence contract.
+
+| ID | Source/stage | Trigger/precondition | Detection | Expected handling | Data/checkpoint state | Idempotency guarantee | Recovery | Alert/evidence | Future test | Pass/fail acceptance | Priority |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| F01 | All five SFTP/staging | Raw part or capture set incomplete; publisher crashes during finalization | Source/capture manifest member/hash/AL_READY checks | Hold outside watched root; repair frozen set | No eligible source delivery or ACK | Fixed source revision and capture IDs | Resume same preparation/publication after owner proof | Raw/capture-set/rename report | Partial publication and unknown accepted-file fixture | No unvalidated DATA enters Bronze; no premature ACK | P0 |
+| F02 | SFTP Auto Loader/callback | First files commit, later file batch fails | FILE_COMMIT set differs from expected capture set; native query failure | Keep partial Bronze and same checkpoint; hold package | No DELIVERY_COMMIT/Silver/ACK | Source occurrence/revision identity; matching existing payload | Retry owning availableNow Job | Actual file/batch/Delta evidence | Fail after one committed file batch | Exact final source rows once after restart; partial scope never published | P0 |
+| F03 | SFTP target/checkpoint | DATA+FILE_COMMIT durable, callback/checkpoint acknowledgment lost | Actual target marker versus native completed-batch state | Resolve old operation; replay callback idempotently | No guessed native advancement | Same row/file keys independent of batch ID | Same checkpoint after quiescence | Delta commit/native batch evidence | Named real commit-before-checkpoint crash | No duplicated DATA; native batch eventually completes | P0 |
+| F04 | SFTP finalizer | Native availableNow succeeds but delivery reconciliation fails/crashes | Native query complete; package marker absent/debt present | Retain file progress; run finalizer even with zero discovered files | No whole-delivery ACK or business readiness | Deterministic delivery completion identity | Reconcile actual target rows; repair finalizer only | File checkpoint/target/source report | Failure after native completion | Next no-data run completes correct package without re-copy/reapply | P0 |
+| F05 | SFTP empty delivery | Valid zero-row Parquet/JSONL/CSV or four-header DAT package | CAPTURE_FILE_CONTROL expected_DATA=0 | Capture technical control/commit; reconcile valid empty source | Zero DATA, real completion/checkpoint | Same empty source revision | Restart same owner | Data/control counts and source headers | Empty package each applicable adapter | No fabricated source row; empty completion and ACK correct | P0 |
+| F06 | SFTP native checkpoint loss | Missing/corrupt isolated checkpoint | Native state error and target file/delivery audit | Stop owner; restore or declare new consumer/recovery generation | No blind append or manual offset repair | Source row/content IDs remain stable | Qualified same-target repair or isolated candidate/cutover | Checkpoint/target generation certificate | Lose checkpoint after committed files | No duplicate logical effects or hidden missing files | P0 |
+| F07 | SFTP schemas/ordinals | Unknown capture schema, wrong original ordinal mapping or reordered filtered output | Physical schema/expected membership/content comparison | Hold acceptance/typed completion, preserve Raw | No successful package marker | Original pinned identity independent of Spark order/hash | Correct approved adapter/declared capture generation | Schema/path/ordinal discrepancy report | Repeated review payloads and filtered ordinal fault; CSV/DAT v2 | Original IDs preserved; breaking drift does not silently disappear | P0 |
+| F08 | H&M onboarding/cutover | Customer/purchase baseline missing members or snapshot/WAL handoff uncertain | Source totals, slot/connector snapshot state and target transaction proof | Keep source replay paused; hold cutover | No claim of complete initial CDC | Native baseline generation/PK and operation IDs | Resume native snapshot or declared recovery | ADF/source/Connect/Bronze handoff record | Bounded baseline interruption at handoff | No second uncoordinated Copy baseline, lost or double source occurrence | P0 |
+| F09 | API scheduling | Both old native cron and ADF schedule enabled, or dispatch response lost | Schedule binding/running Job/token checks | Reject deployment or attach existing run; no overlapping requester | Ledger remains sole frontier; receipt path independent | Same execution token/command identity | Disable competing schedule; resolve actual owner | ADF/Jobs/ledger correlation | Dual-scheduler configuration fixture and lost run-now response | One scheduling owner/active acquisition; accepted receipts still drain during failure | P0 |
+| F10 | Shared Gold/ADF | Metadata and reviews complete in different order; next tick/backfill overlaps | Product owner, frozen dependencies and actual publication marker | Admit only ready scope; defer/attach competing request | Old Gold retained or clearly pending; no false freshness | One writer/product intent; affected groups recomputed | Existing product Job repair; late-input dispatch | Input-version/debt/consumer evidence | Stale G04/G07, duplicate dispatch and late correction | No double write/count, unrelated domains proceed, product SLA miss visible | P0 |
+
 ## 17. Freshness, business SLAs and schedule feasibility
 
 All times below are **design objectives**, not achieved results. R/B/S/G mean verified Raw, Bronze, Silver and Gold. Consumer time includes publication and cache/refresh. Operational clocks use actual source COMMIT acknowledgment, READY publication/verified source clock, provider created time or Kafka append time as specified—not historical event dates.
@@ -1359,17 +1654,17 @@ All times below are **design objectives**, not achieved results. R/B/S/G mean ve
 | Reviews daily, READY |1source day/10elapsedmin; ADF1minactive/15minrecoveryonly | p95≤5 min | p95/p99≤15/30 min |≤25/45 min|≤35/60 min|≤45/75 min;99%≤90 min; cache≤10 min | Supplier+DE; stop original expectations after13Sep2023 |
 | Campbell FULL, READY | Seven historical packages; ADF1minactive |≤15 min|≤30 min|≤45 min|≤60 min|≤75 min; onboarding≤120 min | DE/station gateway; small files feasible by design, runtime pending |
 | Campbell daily, READY | Perstationdaily02:00UTC; ADF1minactive | p95≤5 min |≤15/30 min|≤25/45 min|≤40/60 min|≤50/75 min;99%≤90 min;04:00UTCdeadline; cache≤10 min | Station/source+DE; no raw-logger-time→UTC SLA |
-| Open Prices tail, providercreated eligiblevisibility | Provider independent; acquire15 min/H5 min; receipts5 min | Accepted acquisition≤30 min |≤45minend-to-end; receipt→B≤15 min|Selected≤60 min|Selected≤75 min|Selected99%≤90 min; cache≤5 min | APIowner+DE; conditional runtime gate; no provider visibility/uptime guarantee |
+| Open Prices tail, providercreated eligiblevisibility | Provider independent; ADF acquisition15min/H5min and independent ADF receipt dispatch5min | Accepted acquisition≤30 min |≤45minend-to-end; receipt→B≤15 min|Selected≤60 min|Selected≤75 min|Selected99%≤90 min; cache≤5 min | APIowner+DE; conditional runtime gate; no provider visibility/uptime guarantee |
 | Open Prices bootstrap/older revisions | Boundedhistory; weeklyRESTsweep | Peracceptedwork | Perreceipt≤15minobjective | After eligible capture | After eligible Silver | No invented complete-history deadline or native mutation90minSLA | APIowner; coverage/sweepage reported, densebuckets canblock |
-| REES46 Kafka, publish/brokerappend |60×finiteproducer; native 10 s | No ADLS event Raw | p95≤30 s, p99≤120 s | No duplicate business Silver | Operationalviews only | Selected operational consumer≤3minp99 including≤60scache; business Gold authority remainsSFTP | Producer/broker/DE;6 partitions/inspection/commit qualification pending |
+| REES46 Kafka, publish/brokerappend |60×finiteproducer; native 10 s | No ADLS event Raw | p95≤30 s, p99≤120 s | Logical operational view at Bronze commit; no duplicate physical Silver | Operationalviews only | Selected operational consumer≤3minp99 including≤60scache; business Gold authority remainsSFTP | Producer/broker/DE;6 partitions/inspection/commit qualification pending |
 
 Selected API S/G/consumer and Kafka operational-view objectives are new simulated business policies, not R1 provider promises. Consumer SLA cannot be measured until an actual query/refresh client exists. An API record exposed later than its own created timestamp/overlap is reported as late visibility/re-observation, not hidden by redefining provider guarantees.
 
 ### 17.2 Scheduling arithmetic and target classification
 
-**SFTP:**5 min polling has a nearly5 min worst phase and approximately4.75min95th percentile phase under uniform arrival; only15 s remain before a5 min target, before preflight/copy/hash. That schedule does not establish the objective. Selected1 min active polling provides a budget: discovery≤1 min, admission/preflight≤1 min, copy+full landed verification≤3 min. Warm compute and small bounded DELTAs must meet those actual bounds. End-to-end p95 must be measured directly; adding component p95 s is not a proof of an end-to-end percentile.
+**SFTP:**5 min polling has a nearly5 min worst phase and approximately4.75min95th percentile phase under uniform arrival; only15 s remain before a5 min target, before preflight/copy/hash. That schedule does not establish the objective. Selected1 min active polling provides a Raw budget: discovery≤1 min, admission/preflight≤1 min, copy+full landed verification≤3 min. Warm compute and small bounded DELTAs must meet those actual bounds. Capture preparation/publication, direct ADF Auto Loader dispatch, all micro-batches and finalization are additional Bronze latency components, not hidden inside successful Copy. Their combined actual runtime must fit each source's Bronze15/30-minute or FULL/monthly objective; no extra periodic Auto Loader clock is inserted. End-to-end p95 must be measured directly; adding component p95 s is not a proof of an end-to-end percentile.
 
-**API:** creation→acceptance latency is15 min phase+5 min horizon+Qa(startup/admission)+Ta(acquisition/seal). Receipt publication addsP. Receipt→Bronze adds5 min phase+Qb+Tb. Combined bound:
+**API:** creation→acceptance latency is15 min ADF schedule phase+5 min horizon+Qa(ADF queue/submission and compute startup/admission)+Ta(acquisition/seal). Receipt publication addsP. Receipt→Bronze adds the independent5 min ADF schedule phase+Qb(ADF queue/submission/startup)+Tb. Combined bound:
 **25 min+Qa+Ta+P+Qb+Tb≤45 min.**
 Select Qa+Ta≤9.5 min, P≤0.5 min andQb+Tb≤10 min, so receipt publication is not unbudgeted. Persist/read back receipts in the30 s finalization slice; a missed bound is an incident, not permission to advance an incomplete frontier. Queue-disabled/overlong skipped runs can break freshness while preserving eventual correctness. Those misses remain in metrics.
 
@@ -1396,7 +1691,7 @@ Monitor source-specific missed-delivery thresholds:
 - REES46 monthly lateness versus scheduled02:00and08:00business deadline stays visible; no other month substitutes for missing March.
 - Critical SHA/identity/sequence/unauthorized access failure alerts immediately, regardless of freshness percentile.
 
-Use actual source/receiver clock samples, source_due, READY/write acknowledgment, Copy end, Raw verified, target commit, Gold publication and consumer query timestamps. Store minimized outcome rows in the four controls, immutable detailed reports in evidence and operational alerts in Monitor/ADF/Jobs/broker logs. Track clock error; do not compare unknown Campbell logger time with UTCarrival for latency.
+Use actual source/receiver clocks, source_due, READY/write acknowledgment, ADF queue/start/submission, Copy end, Raw verification, capture-set publication/AL_READY, native file/batch completion, whole-delivery finalization, Gold publication and actual consumer query times. Store minimized outcome rows in the four controls, immutable detailed reports in evidence and operational alerts in Monitor/ADF/Jobs/broker logs. Track clock error; do not compare unknown Campbell logger time with UTCarrival for latency.
 
 P1triage≤15 min, containment decision≤60 min, conditional recovery objective4 h; P2triage≤60 min/next-business-day where source specifies. These are simulated operating objectives, not staffed-service or30-day99.9%availability evidence.
 
@@ -1417,8 +1712,8 @@ P1triage≤15 min, containment decision≤60 min, conditional recovery objective
 
 | Failure | Selected recovery |
 |---|---|
-| SFTP Copy/parse failure | Reuse verified Raw and fixed plan; otherwise new transport attempt of same immutable delivery. No new source action. |
-| SFTP checkpoint absence | No SFTP Auto Loader checkpoint exists in A3. Reconstruct receiver delivery/target marker state from source manifests/Raw and commits; preserve original IDs. |
+| SFTP Copy/parse/Auto Loader failure | Reuse verified Raw and frozen accepted capture set. Same checkpoint and target identities repair partial batches; finalization still runs when discovery is empty. Recopy only when original Raw is invalid/unavailable; no new source action. |
+| SFTP Auto Loader checkpoint loss | Preserve damaged state and stop/fence owner; restore a coherent checkpoint or use a declared new consumer/recovery generation. Reconcile actual file/delivery markers and original source identities; never invent file offsets or blindly append all discovered files. |
 | Supplier journal crash | Restore consistent catalog/journal/action receipts/sealed definitions; fence old publisher; source generation unchanged only if identity/history proof holds. |
 | Article journal ACK loss | Look up exact sealed members and actual target marker; repair ACK. Late committed members remain unACKed for next seal. |
 | Connect restart | Same slot/publication/native internal offsets; repeated source events harmless through native op identity. |
@@ -1459,7 +1754,7 @@ Avoid duplicate business effects through stable source identities, one canonical
 | Identity | Needed boundary; no per-folder proliferation |
 |---|---|
 | Federated GitHub deployment principal | Approved infrastructure/Jobs/ADF/UC grants; no runtime secret embedded in Git |
-| Platform runtime principal | Named Bronze/Silver/Gold/control privileges and required volume access; no catalog ownership |
+| Platform runtime principal | Named Bronze/Silver/Gold/control privileges and volumes; explicit same-principal Azure SDK credentials scoped to accepted staging publication; no catalog ownership or per-source identity |
 | API acquisition principal | Sole acquisition ledger writer; its own narrowly scoped Azure SDK evidence creation credential; also Job run-as—no additional API-SDK principal |
 | ADF system managed identity | Raw writes/config reads, required Key Vault reads and Databricks run/observe permission |
 | One Access Connector managed identity | UC external locations/volumes, reusable storage credential |
@@ -1476,13 +1771,13 @@ One region initially, TLS/certificate verification for HTTPS/database/Kafka, SSH
 
 Use native ADF monitoring/diagnostics, Databricks Job notifications/Spark event and stream metrics, PostgreSQL native slot/transaction metrics, Confluent metrics and Azure Monitor/action group. Minimal diagnostics can reuse existing log destinations; no custom telemetry service or new control database.
 
-Track: source availability, expected-delivery status, oldest unACKed/sealed work, exact gaps, source commit/export/capture/conformance/publication lag, APIattempt/breaker/frontier/receipt debt, Kafka per-partition lag/retention horizon, WAL growth, CDFhorizon, Spark failures/spill/skew, schema/DQexceptions, target version, current release and actual billable node hours/storage/traffic. Alerting health itself is checked—missing telemetry is not healthy ingestion.
+Track: source availability, expected-delivery status, oldest unACKed/sealed work, exact gaps, SFTP Raw/prepared/published/AL_READY counts, native cloudFiles backlog, partial FILE_COMMIT sets, delivery-finalization debt, source commit/export/capture/conformance/publication lag, APIattempt/breaker/frontier/receipt debt, Kafka per-partition lag/retention horizon, WAL growth, CDFhorizon, Spark failures/spill/skew, schema/DQexceptions, target version, current release and actual billable node hours/storage/traffic. Alerting health itself is checked—missing telemetry is not healthy ingestion.
 
 Use400dminimal audit evidence; keep detailed sensitive/debug logs≤7 d and aggregate cost/performance measures without raw source values.
 
 ### 19.3 Current public pricing evidence and formulas
 
-No subscription region/currency/discount or billable resource is authorized. The following **illustrative East US USD retail meters** were read from Microsoft's public Retail Prices API during this audit; they are not an account quotation. Product/SKU filters exclude Windows/Spot and the similarly named Cloud Services product.
+No subscription region/currency/discount or billable resource is authorized. The following **illustrative East US USD retail meters** were read from Microsoft's public Retail Prices API during the retained A3 audit on30October2026; they are not an account quotation. Product/SKU filters exclude Windows/Spot and the similarly named Cloud Services product.
 
 | Public meter / selected SKU | Returned retail unit price |
 |---|---:|
@@ -1517,7 +1812,9 @@ For 96 hours of DEV, these are example usage limits, not performance measurement
 | Kafka capacity | Assumed 96 billed eCKU-hours × $0.75 = $72; use actual billed capacity | A two-eCKU example is $144 before usage; higher SLA option is not implicitly purchased. |
 | Kafka usage/Registry | Actual ingress/egress GB × quoted rates + billed storage GB-month + governance | Four fixture messages do not determine the full population's average encoded size. |
 | SFTP | Enabled hours × current quoted regional r_sftp; compare 24-hour and 96-hour activation | Disabling stops the feature-hour charge, not storage/operation charges. |
-| Supplier/lake storage | Time-weighted GiB × tier/replication rate + read/write/list/immutability operations | 90/365/400-day retention creates costs beyond four days. |
+| Supplier/lake storage | Time-weighted GiB × tier/replication rate + read/write/list/immutability operations; include365-day accepted capture Parquet and400-day manifests | Source Raw is retained separately; actual capture compression/duplication is unmeasured. No extra account for this staging. |
+| SFTP preparation/Auto Loader work | Additional actual node-hours beyond the earlier profile allowances × VM/DBU rates + capture bytes/LIST/rename operations | Do not double-count hours already included above; qualify serial gzip preparation, distributed capture and finalizer cost. |
+| ADF API/product orchestration | Add actual15/5-minute API dispatch, active 1-minute G04/G07 debt checks, run-now/status polling and recovery activities | ADF replaces native API cron; it does not add another HTTP request scheduler or per-micro-batch activities. |
 | ADF | Activity runs/1,000 × activity rate + Copy DIU-hours × rate + applicable IR meters | One-minute discovery over four days gives 5,760 ticks/source; five folders give about 28,800 folder checks before other activities. |
 | NAT/IP/DNS | 96 × gateway/IP hourly rates + processed GB + DNS zone/query fees | Persists while idle; reuse approved compatible egress if available. |
 | Monitor/Key Vault/GitHub | Actual alert/log ingestion/retention, secret operations, runner/artifact use | Bound verbose logs; no assumption of unlimited free service. |
@@ -1527,6 +1824,8 @@ The illustrative VM/database compute subtotal is **$214.40**. Adding the assumed
 Complete example formula:
 
 **286.40 + 0.30×(60u8 + 608u4) + 0.55×72u4 + disks + PostgreSQL storage/backups + lake/supplier storage + Kafka usage/Registry + SFTP + ADF + networking + monitoring.**
+
+A4 adds capture preparation/file storage/discovery/finalization and enterprise ADF activity costs; the previous example hours are not evidence that these fit for free. Measure actual work and revise the authorized cost sheet.
 
 This is a priced worksheet rather than an invented total quotation. Replace unknowns with actual regional/account rates and runtime DBU quantities before approving a spend cap. A 12-hour stream qualification can reduce compute, but cannot prove an 85.2-hour replay or 30-day availability.
 
@@ -1561,9 +1860,9 @@ Rollback redeploys a compatible release. A checkpoint/schema-incompatible change
 3. Create actual Kafka/Registry topics and ACLs, and the shared execution host without a SFTP server, public database or exposed Connect REST port.
 4. Discover UC catalog; create approved schemas, non-overlapping volumes, managed tables and grants through reviewed migrations.
 5. Release inspected reusable code/contracts/metadata; initialize genuine source schemas, journals and import receipts only after execution authorization.
-6. Resolve actual Registry IDs/runtime bindings, two SFTP local users/container permissions and host keys.
-7. Deploy paused Jobs/stopped ADF triggers; validate bindings, network, secrets and UC access.
-8. Qualify control guards, transactions/isolation, occurrence/decimal/manifest correctness and an actual vertical slice per interface.
+6. Resolve actual Registry IDs/runtime bindings, two SFTP local users/container permissions, host keys and the existing platform principal's scoped staging SDK credentials.
+7. Deploy paused Jobs/stopped ADF triggers; disable native cron for ADF-owned article/API/SFTP/domain-product Jobs; validate bindings, network, secrets, UC and SDK access.
+8. Qualify control guards, native transaction/isolation and snapshot handoff, original ordinals/decimals, accepted-file publication, partial Auto Loader recovery/finalization, product ownership and an actual slice per interface.
 9. Activate only approved finite schedules/windows and collect actual freshness, performance and cost evidence.
 10. Implement and qualify source-specific Silver/Gold and late-correction/recovery publication as authorized.
 
@@ -1573,9 +1872,9 @@ This is a deployment plan. No resource or pipeline in this list was provisioned 
 
 | Day | Selected implementation scope | Required exit evidence and practical boundary |
 |---|---|---|
-| 1 | Inspect and reuse existing work; approve actual bindings and cost; qualify foundation; release metadata; Campbell through actual managed SFTP → ADF → Raw → distributed Bronze | Exact headers, counts, hashes, target receipt and ACK; actual Spark workers. Resource approval may delay the start. |
-| 2 | Remaining SFTP source adapters and publisher journals; real H&M initialization, journal and Connect; actual Kafka R2; bounded API acquisition and receipt processing | Representative FULL, increment, empty and retry for each applicable interface; correct native client/source state. Large imports begin early only if authorized. |
-| 3 | Ordered Silver CDC/SCD, exact decimals, approved schema evolution and the Gold catalogue; independent business oracles; measure Spark parallelism, skew and spill | Correct grains, joins, denominators, deletes and late corrections; actual Spark metrics. Samples do not certify full populations. |
+| 1 | Inspect/reuse work; approve bindings/cost; qualify foundation; Campbell through managed SFTP → ADF → Raw → accepted capture files → Auto Loader → Bronze | Exact headers, counts, hashes, target receipt and ACK; actual Spark workers. Resource approval may delay the start. |
+| 2 | Remaining SFTP capture adapters/Auto Loader; real H&M database snapshot/journal/Connect handoff; native Kafka R2; ADF-owned API acquisition/receipt dispatch | Representative FULL, increment, empty and retry for each applicable interface; correct native client/source state. Large imports begin early only if authorized. |
+| 3 | Ordered Silver CDC/SCD, exact decimals, schema evolution; exclusive source/domain Gold writers and ADF dependency handling; independent oracles and Spark measurements | Correct grains, joins, denominators, deletes and late corrections; actual Spark metrics. Samples do not certify full populations. |
 | 4 | Reviewed DEV CI/CD, representative P0/P1 failure and recovery drills, monitoring, cost shutdown and runbooks | Explicit passed, failed, not executed and deferred list; actual source/target coverage; remaining full-scale qualification plan. |
 
 This is an implementation target, not a completion promise. The full 60× REES46 replay needs about 85.2 hours after it starts, excluding setup, import, failures and recovery. Starting it on day 2 cannot certify it by day 4. Full source histories, 30-day availability and all retention/DR tests require separate runtime windows and budget.
@@ -1586,7 +1885,7 @@ Monthly/daily source cadences are not silently accelerated to satisfy the plan. 
 
 | Gate | Required evidence before its corresponding activation claim |
 |---|---|
-| GATE01 architecture approval | User explicitly approves A3 and controlled amendments; recording the document is not approval. |
+| GATE01 architecture approval | User explicitly approves A4 and affected receiver/orchestration amendments; recording the document is not approval. |
 | GATE02 coding/resources | Explicit implementation authorization; separate authorization for billable provisioning and budget. |
 | GATE03 infrastructure | Actual region, subscription, tenant, identity permissions, SKU/quota, network/DNS and discovered UC catalog. |
 | GATE04 storage compatibility | Actual HNS/SFTP authentication, rename, read-back and ADF connector behavior; lake WORM multipart-write and retention compatibility. |
@@ -1595,17 +1894,19 @@ Monthly/daily source cadences are not silently accelerated to satisfy the plan. 
 | GATE07 Kafka protocol | Actual cluster/topic UUIDs/settings, real registry IDs, RF/ISR, atomic abort/fencing/read_committed, retention/compaction and security. |
 | GATE08 API provider | Legitimate read-only documented filter/envelope/schema conformance; no provider load/fault tests or export bootstrap. |
 | GATE09 guarded Delta | Actual CAS loser inserts zero events; deterministic commands; one HEAD; uncertain commit resolution and actual owner termination. |
-| GATE10 file capture | Complete part/manifest integrity; large-write completion-marker atomicity; lost ACK repair; revision continuity and idempotent batch replay. |
-| GATE11 Spark readers | Bounded UC/ABFS streaming gzip/CSV/JSONL reader; exact original ordinals and genuine multiple-worker tasks; no whole-file collection. |
+| GATE10 file capture | Raw/capture membership and schema; accepted-path publication; DATA+FILE_COMMIT atomicity; whole-delivery finalization; empty/partial batch recovery, lost ACK repair and idempotent replay. |
+| GATE11 Spark readers | Bounded source-specific preparation plus actual Auto Loader data ingestion; verified filtered-source ordinal mapping, native Parquet/header fidelity and multiple-worker tasks; no whole-file collection. |
 | GATE12 DQ definitions | All 275 identified rules mapped at their source scope; OFF category-to-predicate definitions and Campbell trusted-measurement dictionary resolved. |
 | GATE13 Gold business correctness | Product questions, KPI denominators, dimension alignment, source authority and exact old/new correction/delete oracles. |
-| GATE14 latency | Actual end-to-end source-specific p95/p99, FULL completion and consumer cache metrics; include startup, preflight, queues and receipt publication. |
+| GATE14 latency | Actual stage/consumer metrics, including ADF queues, preflight, transfer/hash, capture preparation/publication, native file batches/finalizer, API receipt publication and Gold dependency waits. |
 | GATE15 full-source coverage | Complete source identity, multiplicity and operation reconciliation, including all 411,709,736 REES46 occurrences; no count-only/sample extrapolation. |
 | GATE16 recovery | Actual checkpoint, retention, slot, offset and cutover drills; frozen UUID/version proof; reader rebind; no duplicate effects; measured RPO/RTO. |
 | GATE17 security/rights | Real TLS/SSH/ACL checks and secret rotation; restricted logs; source-use, attribution, privacy and retention permissions. |
-| GATE18 cost/release | Actual DBU quantities and regional meters; approved spend cap; paused deployment, compatible rollback and coordinated shutdown proof. |
+| GATE18 cost/release | Actual DBU quantities/regional meters plus A4 capture/ADF costs; approved spend cap, paused deployment, compatible rollback and coordinated shutdown. |
+| GATE19 orchestration ownership | Actual source/Job schedule bindings, no dual API/article/source clocks, independent API receipts, single product writers, duplicate/queued/uncertain ADF run recovery and cross-source readiness. |
+| GATE20 SFTP native semantics | All five actual cloudFiles data paths/checkpoints, capture-file schemas/hashes, zero-DATA control rows, partial batch/commit/checkpoint/finalizer failure and complete original-source coverage/ACK. |
 
-**Architecture decision:** keep the accepted source acquisition semantics and reliability boundaries. Correct managed SFTP/storage compatibility, orchestration ownership, serial API compute, Gold business contracts and measurable failure/SLA behavior. A source profile, prior local test, service feature statement or successful document commit does not establish runtime qualification.
+**Architecture decision:** retain the accepted source semantics and reliability boundaries while correcting A3's SFTP Auto Loader removal and establishing enterprise-wide ADF admission, dependency, publication and recovery ownership. The four source patterns remain technically distinct. A source profile, prior local test, service feature statement or successful document commit does not establish runtime qualification.
 
 **Approval boundary:** submit this complete architecture for review. Implementation, tests, simulators, pipelines, provisioning and deployment remain stopped. Only the authorized architecture.md recording is performed.
 
@@ -1625,6 +1926,12 @@ These references support service behavior; project policies, source facts and al
 - [Databricks Structured Streaming production guidance](https://learn.microsoft.com/en-us/azure/databricks/structured-streaming/production)
 - [Databricks foreachBatch semantics](https://learn.microsoft.com/en-us/azure/databricks/structured-streaming/foreach)
 - [Databricks native Kafka connector](https://learn.microsoft.com/en-us/azure/databricks/connect/streaming/kafka/)
+- [Auto Loader native data discovery](https://learn.microsoft.com/en-us/azure/databricks/ingestion/cloud-object-storage/auto-loader/)
+- [Auto Loader production/availableNow and monitoring](https://learn.microsoft.com/en-us/azure/databricks/ingestion/cloud-object-storage/auto-loader/production)
+- [Auto Loader options and soft file limits](https://learn.microsoft.com/en-us/azure/databricks/spark/api-options)
+- [Auto Loader explicit schema/evolution behavior](https://learn.microsoft.com/en-us/azure/databricks/ingestion/cloud-object-storage/auto-loader/schema)
+- [ADLS hierarchical namespace and rename](https://learn.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-namespace)
+- [ADLS file rename SDK](https://learn.microsoft.com/en-us/python/api/azure-storage-file-datalake/azure.storage.filedatalake.datalakefileclient)
 - [Databricks checkpoint constraints](https://learn.microsoft.com/en-us/azure/databricks/structured-streaming/checkpoints)
 - [Databricks AQE](https://learn.microsoft.com/en-us/azure/databricks/optimizations/aqe)
 - [Flexible Server logical decoding/slots](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-logical)
@@ -1640,6 +1947,6 @@ These references support service behavior; project policies, source facts and al
 
 ## Final decision summary
 
-A3 selects one DEV environment, eight logical integrations and four real interfaces. It uses Azure-managed SFTP and a separate compatible lake account, real private PostgreSQL/Debezium, actual transactional Kafka, the approved REST/ledger/receipt Auto Loader path, metadata-driven ADF, workload-appropriate distributed Spark, 31 justified managed Delta tables and focused business-ready Gold products.
+A4 selects one DEV environment, eight logical integrations and four real interfaces, with mandatory SFTP→ADF→ADLS→Auto Loader→Bronze, separate PostgreSQL snapshot/journal/WAL, approved REST/ledger/receipt and native Kafka strategies. ADF coordinates bounded work and selected Gold products across the enterprise; native connectors/continuous queries retain their state and execution ownership. The justified two-account SFTP/WORM separation, one DEV, 31 managed Delta tables, source fidelity/DQ obligations, distributed Spark and business Gold catalogue remain.
 
-The architecture is ready for **user review**. It is not automatically approved and makes no new implementation, execution, SLA, full-scale, recovery or paid-resource claim. **Stop after recording architecture.md; wait for explicit approval before coding.**
+The corrected A4 architecture is ready for **user review**. It is not automatically approved and makes no new implementation, execution, SLA, full-scale, recovery or paid-resource claim. **Stop after recording architecture.md; wait for explicit approval before coding.**
